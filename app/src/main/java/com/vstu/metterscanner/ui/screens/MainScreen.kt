@@ -6,21 +6,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import com.vstu.metterscanner.data.MeterRepository
+import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.ui.components.MeterCard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    repository: MeterRepository,
+    viewModel: MeterViewModel,
     navController: NavController
 ) {
-    val meters by remember { mutableStateOf(repository.getAllMeters()) }
+    val meters by viewModel.allMeters.collectAsState()
 
     Scaffold(
         topBar = {
@@ -70,3 +72,4 @@ fun MainScreen(
         }
     }
 }
+

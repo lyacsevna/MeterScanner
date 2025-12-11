@@ -9,7 +9,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
-import java.time.format.DateTimeFormatter
 
 @Composable
 fun MeterCard(
@@ -52,7 +51,7 @@ fun MeterCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = meter.date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")),
+                text = meter.date,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

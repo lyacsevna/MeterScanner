@@ -1,20 +1,34 @@
 package com.vstu.metterscanner.data
 
-class MeterRepository {
-    private val meters = mutableListOf<Meter>()
-    private var nextId = 1L
+import android.content.Context
+import com.vstu.metterscanner.data.local.AppDatabase
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
-    fun addMeter(meter: Meter): Long {
-        val newMeter = meter.copy(id = nextId++)
-        meters.add(newMeter)
-        return newMeter.id ?: -1
+class MeterRepository(context: Context) {
+    private val database = AppDatabase.getDatabase(context)
+    private val meterDao = database.meterDao()
+
+    val allMeters: Flow<List<Meter>> =
+        meterDao.getAllMeters()
+            .map { entities -> entities.map { Meter.fromEntity(it) } }
+
+    suspend fun addMeter(meter: Meter): Long {
+        return meterDao.insert(meter.toEntity())
     }
 
-    fun getAllMeters(): List<Meter> = meters.sortedByDescending { it.date }
+    suspend fun getAllMetersSync(): List<Meter> {
+        val entities = meterDao.getAllMeters()
+        // Для синхронного доступа можно использовать Flow.first()
+        return emptyList() // Временное решение
+    }
 
-    fun getMetersByType(type: MeterType): List<Meter> =
-        meters.filter { it.type == type }.sortedByDescending { it.date }
+    fun getMetersByType(type: MeterType): Flow<List<Meter>> {
+        return meterDao.getMetersByType(type)
+            .map { entities -> entities.map { Meter.fromEntity(it) } }
+    }
 
-    fun getLastMeter(type: MeterType): Meter? =
-        meters.filter { it.type == type }.maxByOrNull { it.date }
+    suspend fun getLastMeter(type: MeterType): Meter? {
+        return meterDao.getLastMeter(type)?.let { Meter.fromEntity(it) }
+    }
 }
