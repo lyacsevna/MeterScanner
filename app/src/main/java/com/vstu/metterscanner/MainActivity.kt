@@ -3,6 +3,11 @@ package com.vstu.metterscanner
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -12,7 +17,21 @@ import com.vstu.metterscanner.ui.screens.MainScreen
 import com.vstu.metterscanner.ui.theme.MetterScannerTheme
 
 class MainActivity : ComponentActivity() {
-    private val repository = MeterRepository()
+    private val repository by lazy {
+        MeterRepository(applicationContext)
+    }
+
+    private val viewModel: MeterViewModel by viewModels {
+        object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                if (modelClass.isAssignableFrom(MeterViewModel::class.java)) {
+                    @Suppress("UNCHECKED_CAST")
+                    return MeterViewModel(repository) as T
+                }
+                throw IllegalArgumentException("Unknown ViewModel class")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,10 +45,16 @@ class MainActivity : ComponentActivity() {
                     startDestination = "main"
                 ) {
                     composable("main") {
-                        MainScreen(repository, navController)
+                        MainScreen(
+                            viewModel = viewModel,
+                            navController = navController
+                        )
                     }
                     composable("add") {
-                        AddMeterScreen(repository, navController)
+                        AddMeterScreen(
+                            viewModel = viewModel,
+                            navController = navController
+                        )
                     }
                 }
             }
