@@ -129,6 +129,10 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
+    implementation("com.patrykandpatrick.vico:compose:1.16.0")
+    // Если вы используете Material 3, добавьте также:
+    implementation("com.patrykandpatrick.vico:compose-m3:1.16.0")
+
 
 }
 
