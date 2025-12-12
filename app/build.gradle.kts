@@ -56,6 +56,7 @@ android {
 dependencies {
 
     // Базовые зависимости Compose
+    implementation("androidx.navigation:navigation-compose:2.7.7")
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("com.jakewharton.threetenabp:threetenabp:1.4.6")
@@ -84,6 +85,7 @@ dependencies {
     implementation(libs.androidx.foundation)
     implementation(libs.androidx.compose.ui.geometry)
     implementation(libs.protolite.well.known.types)
+    implementation(libs.androidx.compose.ui.text)
     kapt("androidx.room:room-compiler:2.8.4")
 
     // Hilt

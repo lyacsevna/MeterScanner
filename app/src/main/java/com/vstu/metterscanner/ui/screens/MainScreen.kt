@@ -1,12 +1,10 @@
 package com.vstu.metterscanner.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,20 +15,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
-import com.vstu.metterscanner.ui.components.MeterCard
+import com.vstu.metterscanner.Routes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
-import com.vstu.metterscanner.Routes
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -42,14 +35,17 @@ fun MainScreen(
 ) {
     val meters by viewModel.allMeters.collectAsState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
-    var selectedSortOption by remember { mutableStateOf(SortOption.DATE_DESC) }
-    var selectedFilterType by remember { mutableStateOf<MeterType?>(MeterType.ELECTRICITY) } // Изначально фильтр по электричеству
     var selectedMeter by remember { mutableStateOf<Meter?>(null) }
     var showDetailsDialog by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Сегодняшняя дата для фильтрации
+    // ТОЛЬКО последние 10 показаний
+    val recentMeters = remember(meters) {
+        meters.sortedByDescending { it.date }.take(10)
+    }
+
+    // Сегодняшняя дата для статистики
     val today = LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))
     val todayCount = remember(meters) {
         meters.count { meter ->
@@ -58,21 +54,6 @@ fun MainScreen(
         }
     }
     val totalCount = meters.size
-
-    val sortedFilteredMeters = remember(meters, selectedSortOption, selectedFilterType) {
-        val filtered = if (selectedFilterType != null) {
-            meters.filter { meter -> meter.type == selectedFilterType }
-        } else {
-            meters // Если фильтр не выбран, показываем все
-        }
-        when (selectedSortOption) {
-            SortOption.DATE_DESC -> filtered.sortedByDescending { it.date }
-            SortOption.DATE_ASC -> filtered.sortedBy { it.date }
-            SortOption.VALUE_DESC -> filtered.sortedByDescending { it.value }
-            SortOption.VALUE_ASC -> filtered.sortedBy { it.value }
-            SortOption.TYPE -> filtered.sortedBy { it.type.ordinal }
-        }
-    }
 
     if (showDetailsDialog && selectedMeter != null) {
         MeterDetailsDialog(
@@ -92,9 +73,8 @@ fun MainScreen(
             NavigationDrawerContent(
                 navController = navController,
                 drawerState = drawerState,
-                onFilterTypeSelected = { type -> selectedFilterType = type },
-                onClearFilter = { selectedFilterType = null },
-                coroutineScope = coroutineScope
+                coroutineScope = coroutineScope,
+                totalCount = totalCount
             )
         }
     ) {
@@ -119,37 +99,11 @@ fun MainScreen(
                         }
                     },
                     actions = {
-                        // Сортировка
-                        var expandedSort by remember { mutableStateOf(false) }
-                        IconButton(onClick = { expandedSort = true }) {
-                            Icon(Icons.Default.Sort, contentDescription = "Сортировка")
-                        }
-                        DropdownMenu(
-                            expanded = expandedSort,
-                            onDismissRequest = { expandedSort = false }
+                        // Кнопка быстрого перехода в историю
+                        IconButton(
+                            onClick = { navController.navigate(Routes.HISTORY_SCREEN) }
                         ) {
-                            SortOption.values().forEach { option ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Check,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp),
-                                                tint = if (selectedSortOption == option) MaterialTheme.colorScheme.primary else Color.Transparent
-                                            )
-                                            Text(option.title)
-                                        }
-                                    },
-                                    onClick = {
-                                        selectedSortOption = option
-                                        expandedSort = false
-                                    }
-                                )
-                            }
+                            Icon(Icons.Default.History, contentDescription = "История")
                         }
                     }
                 )
@@ -169,187 +123,56 @@ fun MainScreen(
                     .fillMaxSize()
                     .padding(paddingValues)
             ) {
-                // Dropdown фильтр по типу счетчиков
-                FilterDropdown(
-                    selectedFilterType = selectedFilterType,
-                    onFilterSelected = { selectedFilterType = it },
-                    onClearFilter = { selectedFilterType = null },
+                // Быстрая статистика (карточка)
+                QuickStatsCard(
+                    totalCount = totalCount,
+                    todayCount = todayCount,
+                    recentMeters = recentMeters,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(16.dp)
                 )
 
-                if (sortedFilteredMeters.isEmpty()) {
-                    EmptyStateView(
-                        isFiltered = selectedFilterType != null,
-                        onResetFilter = { selectedFilterType = null },
+                if (recentMeters.isEmpty()) {
+                    EmptyMainView(
                         onAddNew = { navController.navigate("add") },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    // Статистика (просто количество)
-                    FilterStatsCard(
-                        meters = sortedFilteredMeters,
-                        selectedFilterType = selectedFilterType,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-
-                    // Список (показывает только отфильтрованные показания)
-                    // При выборе "Все типы" показываем сгруппированные по типам
-                    MetersList(
-                        meters = sortedFilteredMeters,
-                        selectedFilterType = selectedFilterType,
-                        selectedSortOption = selectedSortOption,
-                        onMeterClick = { meter ->
-                            selectedMeter = meter
-                            showDetailsDialog = true
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun FilterDropdown(
-    selectedFilterType: MeterType?,
-    onFilterSelected: (MeterType) -> Unit,
-    onClearFilter: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "Тип счётчика:",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            if (selectedFilterType != null) {
-                AssistChip(
-                    onClick = onClearFilter,
-                    label = { Text("Все типы") },
-                    leadingIcon = {
-                        Icon(Icons.Default.AllInclusive, contentDescription = null, modifier = Modifier.size(16.dp))
-                    },
-                    colors = AssistChipDefaults.assistChipColors(
-                        leadingIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                )
-            }
-        }
-
-        // Dropdown для выбора типа счётчика
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = !expanded },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            TextField(
-                value = selectedFilterType?.let {
-                    when (it) {
-                        MeterType.ELECTRICITY -> "Электричество"
-                        MeterType.COLD_WATER -> "Холодная вода"
-                        MeterType.HOT_WATER -> "Горячая вода"
-                    }
-                } ?: "Все типы",
-                onValueChange = {},
-                readOnly = true,
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                placeholder = { Text("Выберите тип счётчика") },
-                colors = ExposedDropdownMenuDefaults.textFieldColors(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor()
-            )
-
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                // Опция "Все типы"
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.AllInclusive,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp)
+                    // Список последних показаний
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(recentMeters) { meter ->
+                            SimpleMeterCard(
+                                meter = meter,
+                                onClick = {
+                                    selectedMeter = meter
+                                    showDetailsDialog = true
+                                }
                             )
-                            Text("Все типы")
                         }
-                    },
-                    onClick = {
-                        onClearFilter()
-                        expanded = false
-                    },
-                    trailingIcon = {
-                        if (selectedFilterType == null) {
-                            Icon(Icons.Default.Check, contentDescription = null)
+
+                        // Кнопка "Вся история"
+                        item {
+                            if (meters.size > 10) {
+                                OutlinedButton(
+                                    onClick = { navController.navigate(Routes.HISTORY_SCREEN) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 16.dp)
+                                ) {
+                                    Text("Вся история (${meters.size})")
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Icon(Icons.Default.ArrowForward, null)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(80.dp)) // Для FAB
                         }
                     }
-                )
-
-                Divider()
-
-                // Опции по типам счётчиков
-                MeterType.values().forEach { type ->
-                    DropdownMenuItem(
-                        text = {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = when (type) {
-                                        MeterType.ELECTRICITY -> Icons.Default.FlashOn
-                                        MeterType.COLD_WATER -> Icons.Default.WaterDrop
-                                        MeterType.HOT_WATER -> Icons.Default.Whatshot
-                                    },
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp),
-                                    tint = when (type) {
-                                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                                        MeterType.COLD_WATER -> Color(0xFF2196F3)
-                                        MeterType.HOT_WATER -> Color(0xFFF44336)
-                                    }
-                                )
-                                Text(
-                                    text = when (type) {
-                                        MeterType.ELECTRICITY -> "Электричество"
-                                        MeterType.COLD_WATER -> "Холодная вода"
-                                        MeterType.HOT_WATER -> "Горячая вода"
-                                    }
-                                )
-                            }
-                        },
-                        onClick = {
-                            onFilterSelected(type)
-                            expanded = false
-                        },
-                        trailingIcon = {
-                            if (selectedFilterType == type) {
-                                Icon(Icons.Default.Check, contentDescription = null)
-                            }
-                        }
-                    )
                 }
             }
         }
@@ -357,261 +180,88 @@ fun FilterDropdown(
 }
 
 @Composable
-fun FilterStatsCard(
-    meters: List<Meter>,
-    selectedFilterType: MeterType?,
+fun QuickStatsCard(
+    totalCount: Int,
+    todayCount: Int,
+    recentMeters: List<Meter>,
     modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier,
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp, horizontal = 16.dp),
+                .padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Информация о фильтре
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Column {
+                Text(
+                    text = "Всего показаний",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = totalCount.toString(),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "$todayCount сегодня",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // Последнее добавленное показание
+            val lastMeter = recentMeters.firstOrNull()
+            if (lastMeter != null) {
+                Column(
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Icon(
-                        imageVector = when (selectedFilterType) {
-                            MeterType.ELECTRICITY -> Icons.Default.FlashOn
-                            MeterType.COLD_WATER -> Icons.Default.WaterDrop
-                            MeterType.HOT_WATER -> Icons.Default.Whatshot
-                            null -> Icons.Default.AllInclusive
-                        },
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                        tint = when (selectedFilterType) {
-                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                            MeterType.COLD_WATER -> Color(0xFF2196F3)
-                            MeterType.HOT_WATER -> Color(0xFFF44336)
-                            null -> MaterialTheme.colorScheme.onSurfaceVariant
-                        }
+                    Text(
+                        text = "Последнее",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Column {
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
-                            text = when (selectedFilterType) {
-                                MeterType.ELECTRICITY -> "Электричество"
-                                MeterType.COLD_WATER -> "Холодная вода"
-                                MeterType.HOT_WATER -> "Горячая вода"
-                                null -> "Все типы счётчиков"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Medium
+                            text = String.format("%.1f", lastMeter.value),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = when (lastMeter.type) {
+                                MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                                MeterType.COLD_WATER -> Color(0xFF2196F3)
+                                MeterType.HOT_WATER -> Color(0xFFF44336)
+                            }
                         )
                         Text(
-                            text = "${meters.size} показаний",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = getUnitForType(lastMeter.type),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 2.dp)
                         )
                     }
+                    Text(
+                        text = lastMeter.date,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-
-            // Последнее показание - выделенный блок
-            val lastMeter = meters.firstOrNull()
-            if (lastMeter != null && selectedFilterType != null) {
-                LastReadingBadge(
-                    value = lastMeter.value,
-                    unit = getUnitForType(lastMeter.type),
-                    type = lastMeter.type
-                )
-            }
         }
     }
 }
 
 @Composable
-fun LastReadingBadge(
-    value: Double,
-    unit: String,
-    type: MeterType
-) {
-    Surface(
-        modifier = Modifier,
-        shape = MaterialTheme.shapes.large,
-        color = when (type) {
-            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primaryContainer
-            MeterType.COLD_WATER -> Color(0xFF2196F3).copy(alpha = 0.1f)
-            MeterType.HOT_WATER -> Color(0xFFF44336).copy(alpha = 0.1f)
-        },
-        border = BorderStroke(
-            width = 1.dp,
-            color = when (type) {
-                MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                MeterType.COLD_WATER -> Color(0xFF2196F3).copy(alpha = 0.3f)
-                MeterType.HOT_WATER -> Color(0xFFF44336).copy(alpha = 0.3f)
-            }
-        ),
-        tonalElevation = 2.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            // Иконка и подпись
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Timelapse,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = when (type) {
-                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                        MeterType.COLD_WATER -> Color(0xFF2196F3)
-                        MeterType.HOT_WATER -> Color(0xFFF44336)
-                    }
-                )
-                Text(
-                    text = "Последнее",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            // Значение и единицы измерения
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = String.format("%.1f", value),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = when (type) {
-                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                        MeterType.COLD_WATER -> Color(0xFF2196F3)
-                        MeterType.HOT_WATER -> Color(0xFFF44336)
-                    }
-                )
-                Text(
-                    text = unit,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 2.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun MetersList(
-    meters: List<Meter>,
-    selectedFilterType: MeterType?,
-    selectedSortOption: SortOption,
-    onMeterClick: (Meter) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        if (selectedFilterType == null) {
-            // При выборе "Все типы" - группируем по типам
-            val groupedMeters = meters.groupBy { it.type }
-
-            MeterType.values().forEach { type ->
-                val typeMeters = groupedMeters[type]
-                if (!typeMeters.isNullOrEmpty()) {
-                    item {
-                        TypeHeader(
-                            type = type,
-                            count = typeMeters.size,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    }
-
-                    items(typeMeters) { meter ->
-                        MeterCardWithUnit(
-                            meter = meter,
-                            onClick = { onMeterClick(meter) }
-                        )
-                    }
-                }
-            }
-        } else {
-            // При выборе конкретного типа - просто показываем список
-            items(meters) { meter ->
-                MeterCardWithUnit(
-                    meter = meter,
-                    onClick = { onMeterClick(meter) }
-                )
-            }
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(80.dp)) // Для FAB
-        }
-    }
-}
-
-@Composable
-fun TypeHeader(
-    type: MeterType,
-    count: Int,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Icon(
-            imageVector = when (type) {
-                MeterType.ELECTRICITY -> Icons.Default.FlashOn
-                MeterType.COLD_WATER -> Icons.Default.WaterDrop
-                MeterType.HOT_WATER -> Icons.Default.Whatshot
-            },
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = when (type) {
-                MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                MeterType.COLD_WATER -> Color(0xFF2196F3)
-                MeterType.HOT_WATER -> Color(0xFFF44336)
-            }
-        )
-
-        Column(
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                text = when (type) {
-                    MeterType.ELECTRICITY -> "Электричество"
-                    MeterType.COLD_WATER -> "Холодная вода"
-                    MeterType.HOT_WATER -> "Горячая вода"
-                },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "$count показаний • ${getUnitForType(type)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-fun MeterCardWithUnit(
+fun SimpleMeterCard(
     meter: Meter,
     onClick: () -> Unit
 ) {
@@ -627,28 +277,26 @@ fun MeterCardWithUnit(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = when (meter.type) {
-                            MeterType.ELECTRICITY -> Icons.Default.FlashOn
-                            MeterType.COLD_WATER -> Icons.Default.WaterDrop
-                            MeterType.HOT_WATER -> Icons.Default.Whatshot
-                        },
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = when (meter.type) {
-                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                            MeterType.COLD_WATER -> Color(0xFF2196F3)
-                            MeterType.HOT_WATER -> Color(0xFFF44336)
-                        }
-                    )
+                Icon(
+                    imageVector = when (meter.type) {
+                        MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                        MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                        MeterType.HOT_WATER -> Icons.Default.Whatshot
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = when (meter.type) {
+                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                        MeterType.COLD_WATER -> Color(0xFF2196F3)
+                        MeterType.HOT_WATER -> Color(0xFFF44336)
+                    }
+                )
+
+                Column {
                     Text(
                         text = when (meter.type) {
                             MeterType.ELECTRICITY -> "Электричество"
@@ -658,68 +306,39 @@ fun MeterCardWithUnit(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
-                }
-
-                Text(
-                    text = meter.date,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                if (meter.note.isNotBlank()) {
                     Text(
-                        text = meter.note,
+                        text = meter.date,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
             Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalAlignment = Alignment.End
             ) {
-                Row(
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = String.format("%.1f", meter.value),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = when (meter.type) {
-                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                            MeterType.COLD_WATER -> Color(0xFF2196F3)
-                            MeterType.HOT_WATER -> Color(0xFFF44336)
-                        }
-                    )
-                    Text(
-                        text = getUnitForType(meter.type),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
-                }
-
-                if (meter.photoPath != null) {
-                    Icon(
-                        Icons.Default.Photo,
-                        contentDescription = "Есть фото",
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
+                Text(
+                    text = String.format("%.1f", meter.value),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = when (meter.type) {
+                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                        MeterType.COLD_WATER -> Color(0xFF2196F3)
+                        MeterType.HOT_WATER -> Color(0xFFF44336)
+                    }
+                )
+                Text(
+                    text = getUnitForType(meter.type),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
 }
 
 @Composable
-fun EmptyStateView(
-    isFiltered: Boolean,
-    onResetFilter: () -> Unit,
+fun EmptyMainView(
     onAddNew: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -729,7 +348,7 @@ fun EmptyStateView(
         verticalArrangement = Arrangement.Center
     ) {
         Icon(
-            imageVector = Icons.Default.Assessment,
+            imageVector = Icons.Default.AddCircle,
             contentDescription = null,
             modifier = Modifier.size(80.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
@@ -738,7 +357,7 @@ fun EmptyStateView(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = if (isFiltered) "Нет показаний" else "Нет данных",
+            text = "Нет показаний",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Medium
         )
@@ -746,44 +365,26 @@ fun EmptyStateView(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = if (isFiltered)
-                "Для выбранного типа счётчика показаний не найдено"
-            else
-                "Добавьте первое показание счётчика",
+            text = "Добавьте первое показание счётчика",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             modifier = Modifier.padding(horizontal = 48.dp)
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        Column(
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Button(
+            onClick = onAddNew,
+            modifier = Modifier.width(200.dp)
         ) {
-            Button(
-                onClick = onAddNew,
-                modifier = Modifier.width(200.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Добавить")
-            }
-
-            if (isFiltered) {
-                OutlinedButton(
-                    onClick = onResetFilter,
-                    modifier = Modifier.width(200.dp)
-                ) {
-                    Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Все типы")
-                }
-            }
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Добавить")
         }
     }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1032,9 +633,8 @@ fun EditMeterDialog(
 fun NavigationDrawerContent(
     navController: NavController,
     drawerState: DrawerState,
-    onFilterTypeSelected: (MeterType) -> Unit,
-    onClearFilter: () -> Unit,
-    coroutineScope: CoroutineScope
+    coroutineScope: CoroutineScope,
+    totalCount: Int
 ) {
     Column(
         modifier = Modifier
@@ -1076,10 +676,10 @@ fun NavigationDrawerContent(
                 .weight(1f)
                 .padding(vertical = 16.dp)
         ) {
-            // В функции NavigationDrawerContent обновите навигацию:
             DrawerItem(
-                icon = Icons.Default.Home,
+                icon = Icons.Default.Dashboard,
                 label = "Главная",
+                badge = { if (totalCount > 0) Badge { Text(totalCount.toString()) } },
                 onClick = {
                     navController.navigate(Routes.MAIN_SCREEN) {
                         popUpTo(Routes.MAIN_SCREEN) { inclusive = true }
@@ -1091,7 +691,7 @@ fun NavigationDrawerContent(
 
             DrawerItem(
                 icon = Icons.Default.Add,
-                label = "Добавить",
+                label = "Добавить показания",
                 onClick = {
                     navController.navigate(Routes.ADD_METER_SCREEN)
                     coroutineScope.launch { drawerState.close() }
@@ -1099,22 +699,24 @@ fun NavigationDrawerContent(
             )
 
             DrawerItem(
+                icon = Icons.Default.History,
+                label = "История и поиск",
+                onClick = {
+                    navController.navigate(Routes.HISTORY_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
+
+            DrawerItem(
                 icon = Icons.Default.BarChart,
-                label = "Статистика",
+                label = "Аналитика",
                 onClick = {
                     navController.navigate(Routes.STATISTICS_SCREEN)
                     coroutineScope.launch { drawerState.close() }
                 }
             )
 
-            DrawerItem(
-                icon = Icons.Default.History,
-                label = "История",
-                onClick = {
-                    navController.navigate(Routes.HISTORY_SCREEN)
-                    coroutineScope.launch { drawerState.close() }
-                }
-            )
+            Divider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
             DrawerItem(
                 icon = Icons.Default.Settings,
@@ -1152,6 +754,29 @@ fun DrawerItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
+    selected: Boolean = false,
+    badge: @Composable (() -> Unit)? = null
+) {
+    NavigationDrawerItem(
+        label = { Text(label) },
+        icon = {
+            Box {
+                Icon(icon, contentDescription = null)
+                badge?.invoke()
+            }
+        },
+        selected = selected,
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DrawerItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
     selected: Boolean = false
 ) {
     NavigationDrawerItem(
@@ -1170,10 +795,3 @@ fun getUnitForType(type: MeterType): String = when (type) {
     MeterType.HOT_WATER -> "м³"
 }
 
-enum class SortOption(val title: String) {
-    DATE_DESC("Сначала новые"),
-    DATE_ASC("Сначала старые"),
-    VALUE_DESC("По убыванию"),
-    VALUE_ASC("По возрастанию"),
-    TYPE("По типу")
-}
