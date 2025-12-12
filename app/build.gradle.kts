@@ -80,6 +80,10 @@ dependencies {
     implementation("androidx.room:room-ktx:2.8.4")
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.scenecore)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.foundation)
+    implementation(libs.androidx.compose.ui.geometry)
+    implementation(libs.protolite.well.known.types)
     kapt("androidx.room:room-compiler:2.8.4")
 
     // Hilt
@@ -106,6 +110,24 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // CameraX
+    implementation("androidx.camera:camera-core:1.3.3")
+    implementation("androidx.camera:camera-camera2:1.3.3")
+    implementation("androidx.camera:camera-lifecycle:1.3.3")
+    implementation("androidx.camera:camera-view:1.3.3")
+    implementation("androidx.camera:camera-extensions:1.3.3")
+
+    // ML Kit для распознавания текста
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+    implementation("com.google.mlkit:text-recognition:16.0.0")
+
+    // Для работы с файлами
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    // Для удобного доступа к файловой системе
+    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
 
 }

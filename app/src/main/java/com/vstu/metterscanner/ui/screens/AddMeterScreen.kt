@@ -1,14 +1,13 @@
 package com.vstu.metterscanner.ui.screens
 
 import android.content.Context
-import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import android.util.Log
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,22 +19,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
 import kotlinx.coroutines.launch
-import java.util.concurrent.Executors
+import java.io.File
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,10 +44,9 @@ fun AddMeterScreen(
     var value by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var lastMeter by remember { mutableStateOf<Meter?>(null) }
-    var showSuccessSnackbar by remember { mutableStateOf(false) }
-    var showErrorSnackbar by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf("") }
     var showCamera by remember { mutableStateOf(false) }
+    var capturedPhotoPath by remember { mutableStateOf<String?>(null) }
+    var showPhotoPreview by remember { mutableStateOf(false) }
 
     val isFormValid by remember {
         derivedStateOf {
@@ -60,44 +56,39 @@ fun AddMeterScreen(
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
     // Получаем последнее показание при изменении типа
     LaunchedEffect(selectedType) {
         lastMeter = viewModel.getLastMeter(selectedType)
     }
 
-    // Показ Snackbar при успехе
-    LaunchedEffect(showSuccessSnackbar) {
-        if (showSuccessSnackbar) {
-            snackbarHostState.showSnackbar(
-                message = "Показание успешно сохранено!",
-                duration = SnackbarDuration.Short
-            )
-            showSuccessSnackbar = false
-        }
-    }
-
-    // Показ Snackbar при ошибке
-    LaunchedEffect(showErrorSnackbar) {
-        if (showErrorSnackbar) {
-            snackbarHostState.showSnackbar(
-                message = errorMessage,
-                duration = SnackbarDuration.Long,
-                withDismissAction = true
-            )
-            showErrorSnackbar = false
-        }
-    }
-
     if (showCamera) {
         CameraScanScreen(
-            onResult = { scannedValue ->
+            onResult = { scannedValue, photoPath ->
                 value = scannedValue
+                capturedPhotoPath = photoPath
                 showCamera = false
+                if (photoPath != null) {
+                    showPhotoPreview = true
+                }
             },
             onCancel = {
                 showCamera = false
             }
+        )
+    } else if (showPhotoPreview && capturedPhotoPath != null) {
+        PhotoPreviewScreen(
+            photoPath = capturedPhotoPath!!,
+            onConfirm = {
+                showPhotoPreview = false
+            },
+            onRetake = {
+                showPhotoPreview = false
+                showCamera = true
+            },
+            recognizedValue = value,
+            viewModel = viewModel
         )
     } else {
         Scaffold(
@@ -137,6 +128,58 @@ fun AddMeterScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
+                // Превью фотографии, если она есть
+                capturedPhotoPath?.let { photoPath ->
+                    val bitmap = loadBitmapFromFile(context, photoPath)
+                    bitmap?.let {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Сделанное фото",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            capturedPhotoPath = null
+                                            showPhotoPreview = false
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Удалить фото",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Image(
+                                    bitmap = it.asImageBitmap(),
+                                    contentDescription = "Фото счетчика",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(200.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Выбор типа счетчика
                 Column(
                     modifier = Modifier
@@ -149,7 +192,6 @@ fun AddMeterScreen(
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
 
-                    // Выпадающий список для выбора типа счетчика
                     var expanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
                         expanded = expanded,
@@ -188,13 +230,16 @@ fun AddMeterScreen(
                                     onClick = {
                                         selectedType = type
                                         expanded = false
-                                        // Обновляем значение из последнего показания
-                                        if (lastMeter != null) {
-                                            value = lastMeter!!.value.toString()
-                                            note = lastMeter!!.note
-                                        } else {
-                                            value = ""
-                                            note = ""
+                                        // Загружаем последнее показание для этого типа
+                                        coroutineScope.launch {
+                                            lastMeter = viewModel.getLastMeter(type)
+                                            if (lastMeter != null) {
+                                                value = lastMeter!!.value.toString()
+                                                note = lastMeter!!.note
+                                            } else {
+                                                value = ""
+                                                note = ""
+                                            }
                                         }
                                     }
                                 )
@@ -302,30 +347,38 @@ fun AddMeterScreen(
                                 focusManager.clearFocus()
                                 val meterValue = value.toDouble()
 
-                                // Проверка: новое показание должно быть больше предыдущего
                                 val lastValue = lastMeter?.value ?: 0.0
                                 if (meterValue < lastValue) {
-                                    errorMessage = "Новое показание должно быть больше предыдущего ($lastValue)"
-                                    showErrorSnackbar = true
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(
+                                            message = "Новое показание должно быть больше предыдущего ($lastValue)",
+                                            duration = SnackbarDuration.Long
+                                        )
+                                    }
                                     return@Button
                                 }
 
                                 val meter = Meter(
                                     type = selectedType,
                                     value = meterValue,
-                                    note = note
+                                    note = note,
+                                    photoPath = capturedPhotoPath
                                 )
 
                                 coroutineScope.launch {
                                     try {
                                         viewModel.addMeter(meter)
-                                        showSuccessSnackbar = true
-                                        // Задержка перед возвратом на главный экран
+                                        snackbarHostState.showSnackbar(
+                                            message = "Показание успешно сохранено!",
+                                            duration = SnackbarDuration.Short
+                                        )
                                         kotlinx.coroutines.delay(1500)
                                         navController.popBackStack()
                                     } catch (e: Exception) {
-                                        errorMessage = "Ошибка сохранения: ${e.message}"
-                                        showErrorSnackbar = true
+                                        snackbarHostState.showSnackbar(
+                                            message = "Ошибка сохранения: ${e.message}",
+                                            duration = SnackbarDuration.Long
+                                        )
                                     }
                                 }
                             }
@@ -360,247 +413,6 @@ fun AddMeterScreen(
             }
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun CameraScanScreen(
-    onResult: (String) -> Unit,
-    onCancel: () -> Unit
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var recognizedText by remember { mutableStateOf("") }
-    var manualInput by remember { mutableStateOf("") }
-
-    // Ланчер для запроса разрешения камеры
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            Log.d("CameraScanScreen", "Разрешение на камеру получено")
-        } else {
-            Log.d("CameraScanScreen", "Разрешение на камеру отклонено")
-        }
-    }
-
-    // Проверяем разрешение при запуске
-    val hasCameraPermission = remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-        )
-    }
-
-    // Запрашиваем разрешение если его нет
-    LaunchedEffect(Unit) {
-        if (!hasCameraPermission.value) {
-            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Сканирование показаний") },
-                navigationIcon = {
-                    IconButton(onClick = onCancel) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            if (recognizedText.isNotEmpty() || manualInput.isNotEmpty()) {
-                FloatingActionButton(
-                    onClick = {
-                        val result = if (manualInput.isNotEmpty()) {
-                            manualInput
-                        } else {
-                            extractNumberFromText(recognizedText) ?: ""
-                        }
-                        if (result.isNotBlank()) {
-                            onResult(result)
-                        }
-                    }
-                ) {
-                    Icon(Icons.Default.Check, contentDescription = "Использовать")
-                }
-            }
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            if (hasCameraPermission.value) {
-                // Камера
-                SimpleCameraView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                )
-
-                // Область для результатов сканирования и ручного ввода
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "Распознанный текст",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (recognizedText.isNotEmpty()) recognizedText else "Наведите камеру на показания счетчика...",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Divider()
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            text = "Или введите вручную",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        OutlinedTextField(
-                            value = manualInput,
-                            onValueChange = { newValue ->
-                                if (newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
-                                    manualInput = newValue
-                                }
-                            },
-                            label = { Text("Введите показания") },
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Decimal,
-                                imeAction = ImeAction.Done
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Демо-кнопка для тестирования (временная)
-                        Button(
-                            onClick = {
-                                recognizedText = "Текущие показания: 1234.56 кВт⋅ч"
-                                manualInput = "1234.56"
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Демо: считать 1234.56")
-                        }
-                    }
-                }
-            } else {
-                // Если нет разрешения
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Camera,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "Требуется доступ к камере",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            text = "Для сканирования показаний счетчика необходимо разрешение на использование камеры",
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        Button(
-                            onClick = {
-                                cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
-                            }
-                        ) {
-                            Text("Запросить разрешение")
-                        }
-                        OutlinedButton(
-                            onClick = onCancel
-                        ) {
-                            Text("Вернуться к ручному вводу")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SimpleCameraView(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    AndroidView(
-        factory = { context ->
-            PreviewView(context).apply {
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-
-                // Инициализируем камеру
-                val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-                cameraProviderFuture.addListener({
-                    try {
-                        val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
-
-                        val preview = Preview.Builder()
-                            .build()
-                            .also {
-                                it.setSurfaceProvider(surfaceProvider)
-                            }
-
-                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                        // Останавливаем предыдущие use cases и запускаем новые
-                        cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            cameraSelector,
-                            preview
-                        )
-
-                    } catch (e: Exception) {
-                        Log.e("CameraScreen", "Ошибка инициализации камеры: ${e.message}", e)
-                    }
-                }, ContextCompat.getMainExecutor(context))
-            }
-        },
-        modifier = modifier
-    )
-}
-
-// Функция для извлечения чисел из текста
-private fun extractNumberFromText(text: String): String? {
-    val regex = """\d+[,.]?\d*""".toRegex()
-    val match = regex.find(text)
-    return match?.value?.replace(',', '.')
 }
 
 @Composable

@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/mainScreen">
+
+    <!-- Главный экран -->
+    <fragment
+        android:id="@+id/mainScreen"
+        android:name="com.vstu.metterscanner.ui.screens.MainScreen"
+        android:label="Мои счётчики"
+        tools:layout="@layout/fragment_main_screen">
+
+        <action
+            android:id="@+id/action_mainScreen_to_addMeterScreen"
+            app:destination="@id/addMeterScreen" />
+
+        <action
+            android:id="@+id/action_mainScreen_to_historyScreen"
+            app:destination="@id/historyScreen" />
+
+        <action
+            android:id="@+id/action_mainScreen_to_statisticsScreen"
+            app:destination="@id/statisticsScreen" />
+
+        <action
+            android:id="@+id/action_mainScreen_to_settingsScreen"
+            app:destination="@id/settingsScreen" />
+
+        <action
+            android:id="@+id/action_mainScreen_to_helpScreen"
+            app:destination="@id/helpScreen" />
+
+        <action
+            android:id="@+id/action_mainScreen_to_aboutScreen"
+            app:destination="@id/aboutScreen" />
+    </fragment>
+
+    <!-- Добавить показания -->
+    <fragment
+        android:id="@+id/addMeterScreen"
+        android:name="com.vstu.metterscanner.ui.screens.AddMeterScreen"
+        android:label="Добавить показания"
+        tools:layout="@layout/fragment_add_meter_screen">
+
+        <action
+            android:id="@+id/action_addMeterScreen_to_cameraScanScreen"
+            app:destination="@id/cameraScanScreen" />
+
+        <action
+            android:id="@+id/action_addMeterScreen_to_photoPreviewScreen"
+            app:destination="@id/photoPreviewScreen">
+            <argument
+                android:name="photoPath"
+                app:argType="string" />
+            <argument
+                android:name="recognizedValue"
+                app:argType="string" />
+        </action>
+
+        <action
+            android:id="@+id/action_addMeterScreen_pop"
+            app:popUpTo="@id/mainScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+    <!-- История -->
+    <fragment
+        android:id="@+id/historyScreen"
+        android:name="com.vstu.metterscanner.ui.screens.HistoryScreen"
+        android:label="История показаний"
+        tools:layout="@layout/fragment_history_screen">
+
+        <action
+            android:id="@+id/action_historyScreen_pop"
+            app:popUpTo="@id/mainScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+    <!-- Статистика -->
+    <fragment
+        android:id="@+id/statisticsScreen"
+        android:name="com.vstu.metterscanner.ui.screens.StatisticsScreen"
+        android:label="Статистика"
+        tools:layout="@layout/fragment_statistics_screen">
+
+        <action
+            android:id="@+id/action_statisticsScreen_pop"
+            app:popUpTo="@id/mainScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+    <!-- Настройки -->
+    <fragment
+        android:id="@+id/settingsScreen"
+        android:name="com.vstu.metterscanner.ui.screens.SettingsScreen"
+        android:label="Настройки"
+        tools:layout="@layout/fragment_settings_screen">
+
+        <action
+            android:id="@+id/action_settingsScreen_to_helpScreen"
+            app:destination="@id/helpScreen" />
+
+        <action
+            android:id="@+id/action_settingsScreen_pop"
+            app:popUpTo="@id/mainScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+    <!-- Помощь -->
+    <fragment
+        android:id="@+id/helpScreen"
+        android:name="com.vstu.metterscanner.ui.screens.HelpScreen"
+        android:label="Помощь"
+        tools:layout="@layout/fragment_help_screen">
+
+        <action
+            android:id="@+id/action_helpScreen_pop"
+            app:popUpTo="@id/mainScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+    <!-- О приложении -->
+    <fragment
+        android:id="@+id/aboutScreen"
+        android:name="com.vstu.metterscanner.ui.screens.AboutScreen"
+        android:label="О приложении"
+        tools:layout="@layout/fragment_about_screen">
+
+        <action
+            android:id="@+id/action_aboutScreen_pop"
+            app:popUpTo="@id/mainScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+    <!-- Сканирование камерой -->
+    <fragment
+        android:id="@+id/cameraScanScreen"
+        android:name="com.vstu.metterscanner.ui.screens.AddWithScannerKt"
+        android:label="Сканирование"
+        tools:layout="@layout/fragment_camera_scan_screen">
+
+        <action
+            android:id="@+id/action_cameraScanScreen_pop"
+            app:popUpTo="@id/addMeterScreen"
+            app:popUpToInclusive="false" />
+
+        <argument
+            android:name="onResult"
+            app:argType="string" />
+        <argument
+            android:name="onCancel"
+            app:argType="string" />
+    </fragment>
+
+    <!-- Предпросмотр фото -->
+    <fragment
+        android:id="@+id/photoPreviewScreen"
+        android:name="com.vstu.metterscanner.ui.screens.PhotoPreviewScreen"
+        android:label="Предпросмотр фото"
+        tools:layout="@layout/fragment_photo_preview_screen">
+
+        <argument
+            android:name="photoPath"
+            app:argType="string" />
+        <argument
+            android:name="recognizedValue"
+            app:argType="string" />
+        <argument
+            android:name="onConfirm"
+            app:argType="string" />
+        <argument
+            android:name="onRetake"
+            app:argType="string" />
+
+        <action
+            android:id="@+id/action_photoPreviewScreen_pop"
+            app:popUpTo="@id/addMeterScreen"
+            app:popUpToInclusive="false" />
+    </fragment>
+
+</navigation>

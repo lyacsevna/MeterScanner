@@ -9,6 +9,12 @@ interface MeterDao {
     @Insert
     suspend fun insert(meter: MeterEntity): Long
 
+    @Update
+    suspend fun update(meter: MeterEntity)
+
+    @Delete
+    suspend fun delete(meter: MeterEntity)
+
     @Query("SELECT * FROM meters ORDER BY date DESC")
     fun getAllMeters(): Flow<List<MeterEntity>>
 
@@ -17,4 +23,7 @@ interface MeterDao {
 
     @Query("SELECT * FROM meters WHERE type = :type ORDER BY date DESC LIMIT 1")
     suspend fun getLastMeter(type: MeterType): MeterEntity?
+
+    @Query("SELECT * FROM meters WHERE id = :id")
+    suspend fun getById(id: Long): MeterEntity?
 }

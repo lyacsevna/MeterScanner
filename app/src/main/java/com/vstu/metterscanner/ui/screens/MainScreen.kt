@@ -3,7 +3,9 @@ package com.vstu.metterscanner.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -11,6 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -20,6 +24,14 @@ import com.vstu.metterscanner.data.MeterType
 import com.vstu.metterscanner.ui.components.MeterCard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import com.vstu.metterscanner.Routes
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,51 +42,90 @@ fun MainScreen(
     val meters by viewModel.allMeters.collectAsState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var selectedSortOption by remember { mutableStateOf(SortOption.DATE_DESC) }
-    var selectedFilterType by remember { mutableStateOf<MeterType?>(null) }
+    var selectedFilterType by remember { mutableStateOf<MeterType?>(MeterType.ELECTRICITY) } // Изначально фильтр по электричеству
+    var selectedMeter by remember { mutableStateOf<Meter?>(null) }
+    var showDetailsDialog by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Сегодняшняя дата для фильтрации
+    val today = LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+    val todayCount = remember(meters) {
+        meters.count { meter ->
+            val meterDate = meter.date.split(" ")[0]
+            meterDate == today
+        }
+    }
+    val totalCount = meters.size
 
     val sortedFilteredMeters = remember(meters, selectedSortOption, selectedFilterType) {
-        val filtered = meters.filter { meter ->
-            selectedFilterType?.let { meter.type == it } ?: true
+        val filtered = if (selectedFilterType != null) {
+            meters.filter { meter -> meter.type == selectedFilterType }
+        } else {
+            meters // Если фильтр не выбран, показываем все
         }
-
         when (selectedSortOption) {
             SortOption.DATE_DESC -> filtered.sortedByDescending { it.date }
             SortOption.DATE_ASC -> filtered.sortedBy { it.date }
             SortOption.VALUE_DESC -> filtered.sortedByDescending { it.value }
             SortOption.VALUE_ASC -> filtered.sortedBy { it.value }
-            SortOption.TYPE -> filtered.sortedWith(
-                compareBy<Meter> { it.type.ordinal }
-                    .thenByDescending { it.date }
-            )
+            SortOption.TYPE -> filtered.sortedBy { it.type.ordinal }
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("MetterScanner") },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        coroutineScope.launch {
-                            drawerState.open()
-                        }
-                    }) {
-                        Icon(Icons.Default.Menu, contentDescription = "Меню")
-                    }
-                },
-                actions = {
-                    // Меню сортировки
-                    var expanded by remember { mutableStateOf(false) }
+    if (showDetailsDialog && selectedMeter != null) {
+        MeterDetailsDialog(
+            meter = selectedMeter!!,
+            viewModel = viewModel,
+            onDismiss = {
+                showDetailsDialog = false
+                selectedMeter = null
+            },
+            snackbarHostState = snackbarHostState
+        )
+    }
 
-                    Box {
-                        IconButton(onClick = { expanded = true }) {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            NavigationDrawerContent(
+                navController = navController,
+                drawerState = drawerState,
+                onFilterTypeSelected = { type -> selectedFilterType = type },
+                onClearFilter = { selectedFilterType = null },
+                coroutineScope = coroutineScope
+            )
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("Мои счётчики", fontWeight = FontWeight.Medium)
+                            Text(
+                                text = "$totalCount показаний • $todayCount сегодня",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = { coroutineScope.launch { drawerState.open() } }
+                        ) {
+                            Icon(Icons.Default.Menu, contentDescription = "Меню")
+                        }
+                    },
+                    actions = {
+                        // Сортировка
+                        var expandedSort by remember { mutableStateOf(false) }
+                        IconButton(onClick = { expandedSort = true }) {
                             Icon(Icons.Default.Sort, contentDescription = "Сортировка")
                         }
-
                         DropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
+                            expanded = expandedSort,
+                            onDismissRequest = { expandedSort = false }
                         ) {
                             SortOption.values().forEach { option ->
                                 DropdownMenuItem(
@@ -83,88 +134,822 @@ fun MainScreen(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            if (selectedSortOption == option) {
-                                                Icon(
-                                                    Icons.Default.Check,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            } else {
-                                                Spacer(modifier = Modifier.size(16.dp))
-                                            }
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = if (selectedSortOption == option) MaterialTheme.colorScheme.primary else Color.Transparent
+                                            )
                                             Text(option.title)
                                         }
                                     },
                                     onClick = {
                                         selectedSortOption = option
-                                        expanded = false
+                                        expandedSort = false
                                     }
                                 )
                             }
                         }
                     }
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = { navController.navigate("add") },
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Добавить", tint = Color.White)
+                }
+            },
+            snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                // Dropdown фильтр по типу счетчиков
+                FilterDropdown(
+                    selectedFilterType = selectedFilterType,
+                    onFilterSelected = { selectedFilterType = it },
+                    onClearFilter = { selectedFilterType = null },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
 
-                    selectedFilterType?.let { type ->
-                        FilterChip(
-                            selected = true,
-                            onClick = { selectedFilterType = null },
-                            label = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        when (type) {
-                                            MeterType.ELECTRICITY -> "⚡"
-                                            MeterType.COLD_WATER -> "💧"
-                                            MeterType.HOT_WATER -> "🔥"
-                                        }
-                                    )
-                                    Text(
-                                        when (type) {
-                                            MeterType.ELECTRICITY -> "Эл."
-                                            MeterType.COLD_WATER -> "Х.в."
-                                            MeterType.HOT_WATER -> "Г.в."
-                                        }
-                                    )
-                                }
-                            },
-                            trailingIcon = {
+                if (sortedFilteredMeters.isEmpty()) {
+                    EmptyStateView(
+                        isFiltered = selectedFilterType != null,
+                        onResetFilter = { selectedFilterType = null },
+                        onAddNew = { navController.navigate("add") },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    // Статистика (просто количество)
+                    FilterStatsCard(
+                        meters = sortedFilteredMeters,
+                        selectedFilterType = selectedFilterType,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+
+                    // Список (показывает только отфильтрованные показания)
+                    // При выборе "Все типы" показываем сгруппированные по типам
+                    MetersList(
+                        meters = sortedFilteredMeters,
+                        selectedFilterType = selectedFilterType,
+                        selectedSortOption = selectedSortOption,
+                        onMeterClick = { meter ->
+                            selectedMeter = meter
+                            showDetailsDialog = true
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FilterDropdown(
+    selectedFilterType: MeterType?,
+    onFilterSelected: (MeterType) -> Unit,
+    onClearFilter: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Тип счётчика:",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (selectedFilterType != null) {
+                AssistChip(
+                    onClick = onClearFilter,
+                    label = { Text("Все типы") },
+                    leadingIcon = {
+                        Icon(Icons.Default.AllInclusive, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        leadingIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+            }
+        }
+
+        // Dropdown для выбора типа счётчика
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            TextField(
+                value = selectedFilterType?.let {
+                    when (it) {
+                        MeterType.ELECTRICITY -> "Электричество"
+                        MeterType.COLD_WATER -> "Холодная вода"
+                        MeterType.HOT_WATER -> "Горячая вода"
+                    }
+                } ?: "Все типы",
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                placeholder = { Text("Выберите тип счётчика") },
+                colors = ExposedDropdownMenuDefaults.textFieldColors(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor()
+            )
+
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                // Опция "Все типы"
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AllInclusive,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text("Все типы")
+                        }
+                    },
+                    onClick = {
+                        onClearFilter()
+                        expanded = false
+                    },
+                    trailingIcon = {
+                        if (selectedFilterType == null) {
+                            Icon(Icons.Default.Check, contentDescription = null)
+                        }
+                    }
+                )
+
+                Divider()
+
+                // Опции по типам счётчиков
+                MeterType.values().forEach { type ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Очистить фильтр",
-                                    modifier = Modifier.size(16.dp)
+                                    imageVector = when (type) {
+                                        MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                                        MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                                        MeterType.HOT_WATER -> Icons.Default.Whatshot
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = when (type) {
+                                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                                        MeterType.COLD_WATER -> Color(0xFF2196F3)
+                                        MeterType.HOT_WATER -> Color(0xFFF44336)
+                                    }
+                                )
+                                Text(
+                                    text = when (type) {
+                                        MeterType.ELECTRICITY -> "Электричество"
+                                        MeterType.COLD_WATER -> "Холодная вода"
+                                        MeterType.HOT_WATER -> "Горячая вода"
+                                    }
                                 )
                             }
+                        },
+                        onClick = {
+                            onFilterSelected(type)
+                            expanded = false
+                        },
+                        trailingIcon = {
+                            if (selectedFilterType == type) {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FilterStatsCard(
+    meters: List<Meter>,
+    selectedFilterType: MeterType?,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp, horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Информация о фильтре
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = when (selectedFilterType) {
+                            MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                            MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                            MeterType.HOT_WATER -> Icons.Default.Whatshot
+                            null -> Icons.Default.AllInclusive
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                        tint = when (selectedFilterType) {
+                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                            MeterType.COLD_WATER -> Color(0xFF2196F3)
+                            MeterType.HOT_WATER -> Color(0xFFF44336)
+                            null -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                    Column {
+                        Text(
+                            text = when (selectedFilterType) {
+                                MeterType.ELECTRICITY -> "Электричество"
+                                MeterType.COLD_WATER -> "Холодная вода"
+                                MeterType.HOT_WATER -> "Горячая вода"
+                                null -> "Все типы счётчиков"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "${meters.size} показаний",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { navController.navigate("add") }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Добавить")
+            }
+
+            // Последнее показание
+            val lastMeter = meters.firstOrNull()
+            if (lastMeter != null && selectedFilterType != null) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Последнее",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "${lastMeter.value} ${getUnitForType(lastMeter.type)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
-    ) { paddingValues ->
-        if (sortedFilteredMeters.isEmpty()) {
-            EmptyStateView(
-                navController = navController,
-                paddingValues = paddingValues,
-                isFiltered = selectedFilterType != null,
-                onResetFilter = { selectedFilterType = null }
-            )
+    }
+}
+
+@Composable
+fun MetersList(
+    meters: List<Meter>,
+    selectedFilterType: MeterType?,
+    selectedSortOption: SortOption,
+    onMeterClick: (Meter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (selectedFilterType == null) {
+            // При выборе "Все типы" - группируем по типам
+            val groupedMeters = meters.groupBy { it.type }
+
+            MeterType.values().forEach { type ->
+                val typeMeters = groupedMeters[type]
+                if (!typeMeters.isNullOrEmpty()) {
+                    item {
+                        TypeHeader(
+                            type = type,
+                            count = typeMeters.size,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+
+                    items(typeMeters) { meter ->
+                        MeterCardWithUnit(
+                            meter = meter,
+                            onClick = { onMeterClick(meter) }
+                        )
+                    }
+                }
+            }
         } else {
-            MetersListView(
-                meters = sortedFilteredMeters,
-                paddingValues = paddingValues,
-                selectedFilterType = selectedFilterType,
-                selectedSortOption = selectedSortOption
+            // При выборе конкретного типа - просто показываем список
+            items(meters) { meter ->
+                MeterCardWithUnit(
+                    meter = meter,
+                    onClick = { onMeterClick(meter) }
+                )
+            }
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(80.dp)) // Для FAB
+        }
+    }
+}
+
+@Composable
+fun TypeHeader(
+    type: MeterType,
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            imageVector = when (type) {
+                MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                MeterType.HOT_WATER -> Icons.Default.Whatshot
+            },
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = when (type) {
+                MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                MeterType.COLD_WATER -> Color(0xFF2196F3)
+                MeterType.HOT_WATER -> Color(0xFFF44336)
+            }
+        )
+
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                text = when (type) {
+                    MeterType.ELECTRICITY -> "Электричество"
+                    MeterType.COLD_WATER -> "Холодная вода"
+                    MeterType.HOT_WATER -> "Горячая вода"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "$count показаний • ${getUnitForType(type)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
+}
+
+@Composable
+fun MeterCardWithUnit(
+    meter: Meter,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = when (meter.type) {
+                            MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                            MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                            MeterType.HOT_WATER -> Icons.Default.Whatshot
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = when (meter.type) {
+                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                            MeterType.COLD_WATER -> Color(0xFF2196F3)
+                            MeterType.HOT_WATER -> Color(0xFFF44336)
+                        }
+                    )
+                    Text(
+                        text = when (meter.type) {
+                            MeterType.ELECTRICITY -> "Электричество"
+                            MeterType.COLD_WATER -> "Холодная вода"
+                            MeterType.HOT_WATER -> "Горячая вода"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Text(
+                    text = meter.date,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (meter.note.isNotBlank()) {
+                    Text(
+                        text = meter.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = String.format("%.1f", meter.value),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = getUnitForType(meter.type),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    )
+                }
+
+                if (meter.photoPath != null) {
+                    Icon(
+                        Icons.Default.Photo,
+                        contentDescription = "Есть фото",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EmptyStateView(
+    isFiltered: Boolean,
+    onResetFilter: () -> Unit,
+    onAddNew: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Assessment,
+            contentDescription = null,
+            modifier = Modifier.size(80.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = if (isFiltered) "Нет показаний" else "Нет данных",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Medium
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = if (isFiltered)
+                "Для выбранного типа счётчика показаний не найдено"
+            else
+                "Добавьте первое показание счётчика",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 48.dp)
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Button(
+                onClick = onAddNew,
+                modifier = Modifier.width(200.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Добавить")
+            }
+
+            if (isFiltered) {
+                OutlinedButton(
+                    onClick = onResetFilter,
+                    modifier = Modifier.width(200.dp)
+                ) {
+                    Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Все типы")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MeterDetailsDialog(
+    meter: Meter,
+    viewModel: MeterViewModel,
+    onDismiss: () -> Unit,
+    snackbarHostState: SnackbarHostState
+) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Детали показания") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Информация
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Тип
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Тип:", fontWeight = FontWeight.Medium)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = when (meter.type) {
+                                        MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                                        MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                                        MeterType.HOT_WATER -> Icons.Default.Whatshot
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(when (meter.type) {
+                                    MeterType.ELECTRICITY -> "Электричество"
+                                    MeterType.COLD_WATER -> "Холодная вода"
+                                    MeterType.HOT_WATER -> "Горячая вода"
+                                })
+                            }
+                        }
+
+                        // Значение
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Показание:", fontWeight = FontWeight.Medium)
+                            Text(
+                                "${meter.value} ${getUnitForType(meter.type)}",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        // Дата
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Дата:", fontWeight = FontWeight.Medium)
+                            Text(meter.date)
+                        }
+
+                        // Заметка
+                        if (meter.note.isNotBlank()) {
+                            Column {
+                                Text("Заметка:", fontWeight = FontWeight.Medium)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(meter.note)
+                            }
+                        }
+                    }
+                }
+
+                // Фото
+                if (meter.photoPath != null) {
+                    val bitmap = remember(meter.photoPath) {
+                        viewModel.loadBitmapFromFile(context, meter.photoPath)
+                    }
+                    if (bitmap != null) {
+                        Card {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("Фото:", fontWeight = FontWeight.Medium)
+                                androidx.compose.foundation.Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "Фото счетчика",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(180.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Закрыть")
+                }
+                Button(
+                    onClick = { showEditDialog = true },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Изменить")
+                }
+            }
+        }
+    )
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Удалить?") },
+            text = { Text("Показание будет удалено безвозвратно") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            viewModel.deleteMeter(meter)
+                            snackbarHostState.showSnackbar("Показание удалено")
+                            showDeleteDialog = false
+                            onDismiss()
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Удалить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
+
+    if (showEditDialog) {
+        EditMeterDialog(
+            meter = meter,
+            onDismiss = { showEditDialog = false },
+            onSave = { updatedMeter ->
+                coroutineScope.launch {
+                    viewModel.updateMeter(updatedMeter)
+                    snackbarHostState.showSnackbar("Показание обновлено")
+                    showEditDialog = false
+                    onDismiss()
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun EditMeterDialog(
+    meter: Meter,
+    onDismiss: () -> Unit,
+    onSave: (Meter) -> Unit
+) {
+    var value by remember { mutableStateOf(meter.value.toString()) }
+    var note by remember { mutableStateOf(meter.note) }
+    val isValid by remember(value) {
+        derivedStateOf { value.isNotBlank() && value.toDoubleOrNull() != null }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Изменить показание") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { if (it.matches(Regex("^\\d*\\.?\\d*$"))) value = it },
+                    label = { Text("Значение (${getUnitForType(meter.type)})") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = value.isNotBlank() && !isValid
+                )
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Заметка") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 60.dp),
+                    maxLines = 3
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (isValid) {
+                        val updatedMeter = meter.copy(
+                            value = value.toDouble(),
+                            note = note
+                        )
+                        onSave(updatedMeter)
+                    }
+                },
+                enabled = isValid
+            ) {
+                Text("Сохранить")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -180,401 +965,140 @@ fun NavigationDrawerContent(
         modifier = Modifier
             .fillMaxHeight()
             .width(280.dp)
-            .padding(horizontal = 16.dp)
+            .background(MaterialTheme.colorScheme.surface)
     ) {
-        Row(
+        // Заголовок
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 24.dp, bottom = 16.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+                .background(MaterialTheme.colorScheme.primary)
+                .padding(24.dp)
         ) {
             Icon(
-                Icons.Default.Person,
-                contentDescription = "Профиль",
+                Icons.Default.Speed,
+                contentDescription = null,
                 modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.primary
+                tint = Color.White
             )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "Личный кабинет",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Пользователь",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-        NavigationDrawerItem(
-            label = { Text("Главная") },
-            icon = { Icon(Icons.Default.Home, contentDescription = null) },
-            selected = true,
-            onClick = {
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        NavigationDrawerItem(
-            label = { Text("Добавить") },
-            icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            selected = false,
-            onClick = {
-                navController.navigate("add")
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Фильтр по типу",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
-        )
-
-        MeterType.values().forEach { type ->
-            NavigationDrawerItem(
-                label = {
-                    Row {
-                        Text(
-                            when (type) {
-                                MeterType.ELECTRICITY -> "⚡ "
-                                MeterType.COLD_WATER -> "💧 "
-                                MeterType.HOT_WATER -> "🔥 "
-                            }
-                        )
-                        Text(
-                            when (type) {
-                                MeterType.ELECTRICITY -> "Электричество"
-                                MeterType.COLD_WATER -> "Холодная вода"
-                                MeterType.HOT_WATER -> "Горячая вода"
-                            }
-                        )
-                    }
-                },
-                icon = {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(
-                                when (type) {
-                                    MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                                    MeterType.COLD_WATER -> Color(0xFF2196F3)
-                                    MeterType.HOT_WATER -> Color(0xFFF44336)
-                                },
-                                shape = androidx.compose.foundation.shape.CircleShape
-                            )
-                    )
-                },
-                selected = false,
-                onClick = {
-                    onFilterTypeSelected(type)
-                    coroutineScope.launch {
-                        drawerState.close()
-                    }
-                }
-            )
-        }
-
-        NavigationDrawerItem(
-            label = { Text("Сбросить фильтр") },
-            icon = { Icon(Icons.Default.Clear, contentDescription = null) },
-            selected = false,
-            onClick = {
-                onClearFilter()
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        NavigationDrawerItem(
-            label = { Text("Статистика") },
-            icon = { Icon(Icons.Default.BarChart, contentDescription = null) },
-            selected = false,
-            onClick = {
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        NavigationDrawerItem(
-            label = { Text("История") },
-            icon = { Icon(Icons.Default.History, contentDescription = null) },
-            selected = false,
-            onClick = {
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        NavigationDrawerItem(
-            label = { Text("Настройки") },
-            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-            selected = false,
-            onClick = {
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        NavigationDrawerItem(
-            label = { Text("Помощь") },
-            icon = { Icon(Icons.Default.Help, contentDescription = null) },
-            selected = false,
-            onClick = {
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        NavigationDrawerItem(
-            label = { Text("Выйти") },
-            icon = { Icon(Icons.Default.Logout, contentDescription = null) },
-            selected = false,
-            onClick = {
-                coroutineScope.launch {
-                    drawerState.close()
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-@Composable
-fun EmptyStateView(
-    navController: NavController,
-    paddingValues: PaddingValues,
-    isFiltered: Boolean,
-    onResetFilter: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(paddingValues)
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "📊",
-            style = MaterialTheme.typography.displayLarge,
-            modifier = Modifier.size(100.dp)
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = if (isFiltered) "Нет показаний для выбранного фильтра" else "Показаний пока нет",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = if (isFiltered)
-                "Попробуйте изменить фильтр или добавьте новое показание"
-            else
-                "Нажмите + чтобы добавить первое показание",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(
-            onClick = { navController.navigate("add") },
-            modifier = Modifier.fillMaxWidth(0.7f),
-            shape = MaterialTheme.shapes.medium
-        ) {
-            Text("Добавить показание")
-        }
-
-        if (isFiltered) {
             Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = onResetFilter,
-                modifier = Modifier.fillMaxWidth(0.7f),
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Text("Сбросить фильтр")
-            }
-        }
-    }
-}
-
-@Composable
-fun MetersListView(
-    meters: List<Meter>,
-    paddingValues: PaddingValues,
-    selectedFilterType: MeterType?,
-    selectedSortOption: SortOption
-) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(paddingValues),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item {
-            Column {
-                // Заголовок с информацией о сортировке и фильтрах
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Показания: ${meters.size}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Text(
-                        text = "Сортировка: ${selectedSortOption.title}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                if (selectedFilterType != null) {
-                    Text(
-                        text = "Фильтр: ${when(selectedFilterType) {
-                            MeterType.ELECTRICITY -> "⚡ Электричество"
-                            MeterType.COLD_WATER -> "💧 Холодная вода"
-                            MeterType.HOT_WATER -> "🔥 Горячая вода"
-                        }}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-
-                // Группировка по типу при сортировке TYPE
-                if (selectedSortOption == SortOption.TYPE) {
-                    val groupedByType = meters.groupBy { it.type }
-
-                    MeterType.values().forEach { type ->
-                        val typeMeters = groupedByType[type]
-                        if (!typeMeters.isNullOrEmpty()) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "${when (type) {
-                                    MeterType.ELECTRICITY -> "⚡ Электричество"
-                                    MeterType.COLD_WATER -> "💧 Холодная вода"
-                                    MeterType.HOT_WATER -> "🔥 Горячая вода"
-                                }} (${typeMeters.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                            typeMeters.forEach { meter ->
-                                MeterCard(meter = meter)
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Если не сортировка по типу, показываем обычный список
-        if (selectedSortOption != SortOption.TYPE) {
-            items(meters) { meter ->
-                MeterCard(meter = meter)
-            }
-        }
-
-        if (meters.isNotEmpty()) {
-            item {
-                TotalSummaryCard(meters)
-            }
-        }
-    }
-}
-
-@Composable
-fun TotalSummaryCard(meters: List<Meter>) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        shape = MaterialTheme.shapes.medium
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
             Text(
-                text = "Итого показаний: ${meters.size}",
-                style = MaterialTheme.typography.titleMedium,
+                "Счётчики",
+                style = MaterialTheme.typography.headlineSmall,
+                color = Color.White,
                 fontWeight = FontWeight.Bold
             )
+            Text(
+                "Учёт коммунальных услуг",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.9f)
+            )
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val groupedByType = meters.groupBy { it.type }
-            MeterType.values().forEach { type ->
-                val typeMeters = groupedByType[type]
-                if (!typeMeters.isNullOrEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = when (type) {
-                                MeterType.ELECTRICITY -> "⚡ Электричество:"
-                                MeterType.COLD_WATER -> "💧 Холодная вода:"
-                                MeterType.HOT_WATER -> "🔥 Горячая вода:"
-                            },
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = typeMeters.size.toString(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold
-                        )
+        // Меню
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(vertical = 16.dp)
+        ) {
+            // В функции NavigationDrawerContent обновите навигацию:
+            DrawerItem(
+                icon = Icons.Default.Home,
+                label = "Главная",
+                onClick = {
+                    navController.navigate(Routes.MAIN_SCREEN) {
+                        popUpTo(Routes.MAIN_SCREEN) { inclusive = true }
                     }
+                    coroutineScope.launch { drawerState.close() }
+                },
+                selected = true
+            )
+
+            DrawerItem(
+                icon = Icons.Default.Add,
+                label = "Добавить",
+                onClick = {
+                    navController.navigate(Routes.ADD_METER_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
                 }
-            }
+            )
+
+            DrawerItem(
+                icon = Icons.Default.BarChart,
+                label = "Статистика",
+                onClick = {
+                    navController.navigate(Routes.STATISTICS_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
+
+            DrawerItem(
+                icon = Icons.Default.History,
+                label = "История",
+                onClick = {
+                    navController.navigate(Routes.HISTORY_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
+
+            DrawerItem(
+                icon = Icons.Default.Settings,
+                label = "Настройки",
+                onClick = {
+                    navController.navigate(Routes.SETTINGS_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
+
+            DrawerItem(
+                icon = Icons.Default.Help,
+                label = "Помощь",
+                onClick = {
+                    navController.navigate(Routes.HELP_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
+
+            DrawerItem(
+                icon = Icons.Default.Info,
+                label = "О приложении",
+                onClick = {
+                    navController.navigate(Routes.ABOUT_SCREEN)
+                    coroutineScope.launch { drawerState.close() }
+                }
+            )
         }
     }
 }
 
-enum class SortOption(
-    val title: String
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DrawerItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    selected: Boolean = false
 ) {
+    NavigationDrawerItem(
+        label = { Text(label) },
+        icon = { Icon(icon, contentDescription = null) },
+        selected = selected,
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+    )
+}
+
+// Функции для получения единиц измерения и опций сортировки
+fun getUnitForType(type: MeterType): String = when (type) {
+    MeterType.ELECTRICITY -> "кВт·ч"
+    MeterType.COLD_WATER -> "м³"
+    MeterType.HOT_WATER -> "м³"
+}
+
+enum class SortOption(val title: String) {
     DATE_DESC("Сначала новые"),
     DATE_ASC("Сначала старые"),
-    VALUE_DESC("По убыванию значения"),
-    VALUE_ASC("По возрастанию значения"),
-    TYPE("По типу счетчика")
+    VALUE_DESC("По убыванию"),
+    VALUE_ASC("По возрастанию"),
+    TYPE("По типу")
 }
