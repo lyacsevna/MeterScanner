@@ -1,5 +1,6 @@
 package com.vstu.metterscanner.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -363,7 +364,10 @@ fun FilterStatsCard(
 ) {
     Card(
         modifier = modifier,
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
+        )
     ) {
         Row(
             modifier = Modifier
@@ -416,25 +420,92 @@ fun FilterStatsCard(
                 }
             }
 
-            // Последнее показание
+            // Последнее показание - выделенный блок
             val lastMeter = meters.firstOrNull()
             if (lastMeter != null && selectedFilterType != null) {
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "Последнее",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "${lastMeter.value} ${getUnitForType(lastMeter.type)}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
+                LastReadingBadge(
+                    value = lastMeter.value,
+                    unit = getUnitForType(lastMeter.type),
+                    type = lastMeter.type
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun LastReadingBadge(
+    value: Double,
+    unit: String,
+    type: MeterType
+) {
+    Surface(
+        modifier = Modifier,
+        shape = MaterialTheme.shapes.large,
+        color = when (type) {
+            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primaryContainer
+            MeterType.COLD_WATER -> Color(0xFF2196F3).copy(alpha = 0.1f)
+            MeterType.HOT_WATER -> Color(0xFFF44336).copy(alpha = 0.1f)
+        },
+        border = BorderStroke(
+            width = 1.dp,
+            color = when (type) {
+                MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                MeterType.COLD_WATER -> Color(0xFF2196F3).copy(alpha = 0.3f)
+                MeterType.HOT_WATER -> Color(0xFFF44336).copy(alpha = 0.3f)
+            }
+        ),
+        tonalElevation = 2.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            // Иконка и подпись
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Timelapse,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = when (type) {
+                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                        MeterType.COLD_WATER -> Color(0xFF2196F3)
+                        MeterType.HOT_WATER -> Color(0xFFF44336)
+                    }
+                )
+                Text(
+                    text = "Последнее",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Значение и единицы измерения
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = String.format("%.1f", value),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = when (type) {
+                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                        MeterType.COLD_WATER -> Color(0xFF2196F3)
+                        MeterType.HOT_WATER -> Color(0xFFF44336)
+                    }
+                )
+                Text(
+                    text = unit,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 2.dp)
+                )
             }
         }
     }
@@ -618,7 +689,11 @@ fun MeterCardWithUnit(
                         text = String.format("%.1f", meter.value),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = when (meter.type) {
+                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                            MeterType.COLD_WATER -> Color(0xFF2196F3)
+                            MeterType.HOT_WATER -> Color(0xFFF44336)
+                        }
                     )
                     Text(
                         text = getUnitForType(meter.type),
