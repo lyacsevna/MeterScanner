@@ -30,6 +30,7 @@ foundationVersion = "1.10.0"
 uiGeometry = "1.10.0"
 protoliteWellKnownTypes = "18.0.1"
 uiText = "1.10.0"
+ui = "1.10.0"
 
 [libraries]
 # Базовые зависимости
@@ -87,6 +88,7 @@ androidx-foundation = { group = "androidx.compose.foundation", name = "foundatio
 androidx-compose-ui-geometry = { group = "androidx.compose.ui", name = "ui-geometry", version.ref = "uiGeometry" }
 protolite-well-known-types = { group = "com.google.firebase", name = "protolite-well-known-types", version.ref = "protoliteWellKnownTypes" }
 androidx-compose-ui-text = { group = "androidx.compose.ui", name = "ui-text", version.ref = "uiText" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "ui" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
