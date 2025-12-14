@@ -28,7 +28,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MetterScanner"
+        android:enableOnBackInvokedCallback="true"
         tools:targetApi="31">
+
 
         <!-- Provider для работы с файлами -->
         <provider

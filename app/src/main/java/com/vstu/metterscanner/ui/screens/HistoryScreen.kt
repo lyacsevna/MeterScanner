@@ -2,10 +2,13 @@
 
 package com.vstu.metterscanner.ui.screens
 
+import android.content.Context
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -13,6 +16,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -20,10 +26,31 @@ import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
 import com.vstu.metterscanner.ui.components.MeterCard
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import kotlinx.coroutines.delay
+import java.io.File
+import java.io.FileOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +71,15 @@ fun HistoryScreen(
 
     // UI состояния
     var showFilters by remember { mutableStateOf(false) }
+
+    // Диалоги редактирования/удаления
+    var selectedMeter by remember { mutableStateOf<Meter?>(null) }
+    var showMeterMenuDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Фильтрация по периоду
     val filteredByPeriod = remember(meters, selectedPeriod) {
@@ -133,6 +169,57 @@ fun HistoryScreen(
         showFilters = false
     }
 
+    // Диалог меню для показаний
+    if (showMeterMenuDialog && selectedMeter != null) {
+        MeterMenuDialog(
+            meter = selectedMeter!!,
+            onDismiss = {
+                showMeterMenuDialog = false
+                selectedMeter = null
+            },
+            onEdit = {
+                showMeterMenuDialog = false
+                showEditDialog = true
+            },
+            onDelete = {
+                showMeterMenuDialog = false
+                showDeleteDialog = true
+            },
+            snackbarHostState = snackbarHostState
+        )
+    }
+
+    // Диалог удаления
+    if (showDeleteDialog && selectedMeter != null) {
+        DeleteMeterDialog(
+            meter = selectedMeter!!,
+            onDismiss = {
+                showDeleteDialog = false
+                selectedMeter = null
+            },
+            onConfirm = {
+                coroutineScope.launch {
+                    viewModel.deleteMeter(selectedMeter!!)
+                    snackbarHostState.showSnackbar("Показание удалено")
+
+                }
+            }
+        )
+    }
+
+    // Диалог редактирования
+    if (showEditDialog && selectedMeter != null) {
+        EditMeterDialog(
+            meter = selectedMeter!!,
+            viewModel = viewModel,
+            onDismiss = {
+                showEditDialog = false
+                selectedMeter = null
+            },
+            snackbarHostState = snackbarHostState
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -178,7 +265,8 @@ fun HistoryScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -291,7 +379,9 @@ fun HistoryScreen(
                             MeterCard(
                                 meter = meter,
                                 onClick = {
-                                    // Можно открыть детали или редактирование
+                                    // Открываем меню для редактирования/удаления
+                                    selectedMeter = meter
+                                    showMeterMenuDialog = true
                                 },
                                 showUnit = true
                             )
@@ -303,6 +393,854 @@ fun HistoryScreen(
     }
 }
 
+
+@Composable
+fun MeterMenuDialog(
+    meter: Meter,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    snackbarHostState: SnackbarHostState
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Действия с показанием") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Информация о показании
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Тип:", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                when (meter.type) {
+                                    MeterType.ELECTRICITY -> "Электричество"
+                                    MeterType.COLD_WATER -> "Холодная вода"
+                                    MeterType.HOT_WATER -> "Горячая вода"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Значение:", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "${meter.value} ${getUnitForType(meter.type)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Дата:", style = MaterialTheme.typography.bodySmall)
+                            Text(meter.date, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                // Информация о фото
+                if (meter.photoPath != null) {
+                    Text(
+                        text = "✓ С фото",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Кнопка удаления
+                OutlinedButton(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Удалить")
+                }
+
+                // Кнопка редактирования
+                Button(
+                    onClick = onEdit,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Изменить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Отмена")
+            }
+        }
+    )
+}
+
+// ДИАЛОГ УДАЛЕНИЯ
+@Composable
+fun DeleteMeterDialog(
+    meter: Meter,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Удалить показание?") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Вы уверены, что хотите удалить это показание?")
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "${meter.value} ${getUnitForType(meter.type)}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            when (meter.type) {
+                                MeterType.ELECTRICITY -> "Электричество"
+                                MeterType.COLD_WATER -> "Холодная вода"
+                                MeterType.HOT_WATER -> "Горячая вода"
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            meter.date,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Это действие нельзя отменить.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    // ВЫПОЛНЯЕМ ПОДТВЕРЖДЕНИЕ И ЗАКРЫВАЕМ ДИАЛОГ
+                    onConfirm()
+                },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Text("Удалить")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена")
+            }
+        }
+    )
+}
+
+// Обновите функцию EditMeterDialog:
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditMeterDialog(
+    meter: Meter,
+    viewModel: MeterViewModel,
+    onDismiss: () -> Unit,
+    snackbarHostState: SnackbarHostState
+) {
+    var value by remember { mutableStateOf(meter.value.toString()) }
+    var note by remember { mutableStateOf(meter.note) }
+    var capturedPhotoPath by remember { mutableStateOf(meter.photoPath) }
+    var showImagePicker by remember { mutableStateOf(false) }
+    var showCropScreen by remember { mutableStateOf(false) }
+    var imageToCropUri by remember { mutableStateOf<Uri?>(null) }
+
+    val isValid by remember(value) {
+        derivedStateOf { value.isNotBlank() && value.toDoubleOrNull() != null }
+    }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Лаунчер для выбора фото из галереи
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            imageToCropUri = uri
+            showCropScreen = true
+        }
+    }
+
+    // Экран обрезки фото
+    if (showCropScreen && imageToCropUri != null) {
+        ImageCropScreen(
+            imageUri = imageToCropUri!!,
+            onCropComplete = { croppedPath ->
+                capturedPhotoPath = croppedPath
+                showCropScreen = false
+                imageToCropUri = null
+            },
+            onCancel = {
+                showCropScreen = false
+                imageToCropUri = null
+            },
+            context = context
+        )
+        return
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Изменить показание") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Информация о типе и дате
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Тип:", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                when (meter.type) {
+                                    MeterType.ELECTRICITY -> "Электричество"
+                                    MeterType.COLD_WATER -> "Холодная вода"
+                                    MeterType.HOT_WATER -> "Горячая вода"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Дата:", style = MaterialTheme.typography.bodySmall)
+                            Text(meter.date, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                // Поле для значения
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { if (it.matches(Regex("^\\d*\\.?\\d*$"))) value = it },
+                    label = { Text("Значение (${getUnitForType(meter.type)})") },
+                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = value.isNotBlank() && !isValid,
+                    leadingIcon = {
+                        Icon(
+                            when (meter.type) {
+                                MeterType.ELECTRICITY -> Icons.Default.FlashOn
+                                MeterType.COLD_WATER -> Icons.Default.WaterDrop
+                                MeterType.HOT_WATER -> Icons.Default.Whatshot
+                            },
+                            contentDescription = null
+                        )
+                    }
+                )
+
+                // Поле для заметки
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Заметка") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 80.dp),
+                    maxLines = 4,
+                    leadingIcon = {
+                        Icon(Icons.Default.Notes, contentDescription = null)
+                    }
+                )
+
+                // Секция с фото
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Фото счетчика",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Кнопка добавить фото
+                            OutlinedButton(
+                                onClick = {
+                                    // Открываем выбор фото из галереи
+                                    imagePickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.AddPhotoAlternate,
+                                    contentDescription = "Добавить фото",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Добавить")
+                            }
+
+                            // Кнопка удалить фото
+                            if (capturedPhotoPath != null) {
+                                IconButton(
+                                    onClick = {
+                                        capturedPhotoPath = null
+                                    },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Удалить фото",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Превью текущего фото
+                    if (capturedPhotoPath != null) {
+                        val currentBitmap = loadBitmapFromFile(context, capturedPhotoPath!!)
+                        if (currentBitmap != null) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f)
+                                )
+                            ) {
+                                Column {
+                                    Image(
+                                        bitmap = currentBitmap.asImageBitmap(),
+                                        contentDescription = "Текущее фото",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(150.dp)
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Текущее фото",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "Нажмите чтобы обрезать",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // Если фото не загружается
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.1f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.BrokenImage,
+                                        contentDescription = "Фото не загружено",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Text(
+                                        text = "Файл фото недоступен",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // Если фото нет
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Photo,
+                                    contentDescription = "Нет фото",
+                                    modifier = Modifier.size(48.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                                Text(
+                                    text = "Нет прикрепленного фото",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    }
+
+                    // Подсказка
+                    Text(
+                        text = "Вы можете добавить фото счетчика для лучшей идентификации",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Отмена")
+                }
+                Button(
+                    onClick = {
+                        if (isValid) {
+                            val updatedMeter = meter.copy(
+                                value = value.toDouble(),
+                                note = note,
+                                photoPath = capturedPhotoPath
+                            )
+                            coroutineScope.launch {
+                                viewModel.updateMeter(updatedMeter)
+                                snackbarHostState.showSnackbar("Показание обновлено")
+                                // НЕМЕДЛЕННОЕ ЗАКРЫТИЕ
+                                onDismiss()
+                            }
+                        }
+                    },
+                    enabled = isValid,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Сохранить")
+                }
+            }
+        }
+    )
+}
+
+// ЭКРАН ОБРЕЗКИ ФОТО
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ImageCropScreen(
+    imageUri: Uri,
+    onCropComplete: (String) -> Unit,
+    onCancel: () -> Unit,
+    context: Context
+) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    var cropRect by remember { mutableStateOf(android.graphics.Rect()) }
+
+    val transformableState = rememberTransformableState { zoomChange, panChange, rotationChange ->
+        scale = (scale * zoomChange).coerceIn(0.5f, 5f)
+        offset += panChange * scale
+    }
+
+    val bitmap = remember(imageUri) {
+        loadBitmapFromUri(context, imageUri)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Обрезка фото") },
+                navigationIcon = {
+                    IconButton(onClick = onCancel) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            // Выполняем обрезку
+                            if (bitmap != null && cropRect.width() > 0 && cropRect.height() > 0) {
+                                val croppedBitmap = android.graphics.Bitmap.createBitmap(
+                                    bitmap!!,
+                                    cropRect.left,
+                                    cropRect.top,
+                                    cropRect.width(),
+                                    cropRect.height()
+                                )
+
+                                // Сохраняем обрезанное фото
+                                val croppedPath = saveCroppedBitmap(context, croppedBitmap)
+                                onCropComplete(croppedPath)
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = "Готово")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        if (bitmap != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                // Инструкция
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Text(
+                            text = "Обрежьте фото счетчика",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Перемещайте и масштабируйте изображение, чтобы счетчик был в рамке",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Область для обрезки
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(16.dp)
+                        .background(Color.Black.copy(alpha = 0.1f))
+                ) {
+                    // Изображение
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Фото для обрезки",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .transformable(transformableState)
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    scale = (scale * zoom).coerceIn(0.5f, 5f)
+                                    offset += pan * scale
+                                }
+                            }
+                    )
+
+                    // Рамка для обрезки
+                    Canvas(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        val canvasWidth = size.width
+                        val canvasHeight = size.height
+
+                        // Размеры рамки (такие же как при сканировании)
+                        val frameWidth = canvasWidth * 0.8f
+                        val frameHeight = frameWidth * 0.3f
+
+                        val frameLeft = (canvasWidth - frameWidth) / 2
+                        val frameTop = (canvasHeight - frameHeight) / 2
+                        val frameRight = frameLeft + frameWidth
+                        val frameBottom = frameTop + frameHeight
+
+                        // Сохраняем координаты для обрезки
+                        cropRect = android.graphics.Rect(
+                            frameLeft.toInt(),
+                            frameTop.toInt(),
+                            frameRight.toInt(),
+                            frameBottom.toInt()
+                        )
+
+                        // Оверлей вокруг рамки
+                        drawRect(
+                            color = Color.Black.copy(alpha = 0.6f),
+                            topLeft = Offset(0f, 0f),
+                            size = size.copy(height = frameTop)
+                        )
+                        drawRect(
+                            color = Color.Black.copy(alpha = 0.6f),
+                            topLeft = Offset(0f, frameBottom),
+                            size = size.copy(height = canvasHeight - frameBottom)
+                        )
+                        drawRect(
+                            color = Color.Black.copy(alpha = 0.6f),
+                            topLeft = Offset(0f, frameTop),
+                            size = size.copy(width = frameLeft, height = frameHeight)
+                        )
+                        drawRect(
+                            color = Color.Black.copy(alpha = 0.6f),
+                            topLeft = Offset(frameRight, frameTop),
+                            size = size.copy(width = canvasWidth - frameRight, height = frameHeight)
+                        )
+
+                        // Зеленая рамка
+                        drawRect(
+                            color = Color.Green,
+                            topLeft = Offset(frameLeft, frameTop),
+                            size = Size(frameWidth, frameHeight),
+                            style = Stroke(width = 3f)
+                        )
+
+                        // Уголки рамки
+                        val cornerLength = 30f
+                        val cornerWidth = 4f
+
+                        // Левый верхний угол
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameLeft, frameTop),
+                            end = Offset(frameLeft + cornerLength, frameTop),
+                            strokeWidth = cornerWidth
+                        )
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameLeft, frameTop),
+                            end = Offset(frameLeft, frameTop + cornerLength),
+                            strokeWidth = cornerWidth
+                        )
+
+                        // Правый верхний угол
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameRight, frameTop),
+                            end = Offset(frameRight - cornerLength, frameTop),
+                            strokeWidth = cornerWidth
+                        )
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameRight, frameTop),
+                            end = Offset(frameRight, frameTop + cornerLength),
+                            strokeWidth = cornerWidth
+                        )
+
+                        // Левый нижний угол
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameLeft, frameBottom),
+                            end = Offset(frameLeft + cornerLength, frameBottom),
+                            strokeWidth = cornerWidth
+                        )
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameLeft, frameBottom),
+                            end = Offset(frameLeft, frameBottom - cornerLength),
+                            strokeWidth = cornerWidth
+                        )
+
+                        // Правый нижний угол
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameRight, frameBottom),
+                            end = Offset(frameRight - cornerLength, frameBottom),
+                            strokeWidth = cornerWidth
+                        )
+                        drawLine(
+                            color = Color.Green,
+                            start = Offset(frameRight, frameBottom),
+                            end = Offset(frameRight, frameBottom - cornerLength),
+                            strokeWidth = cornerWidth
+                        )
+                    }
+                }
+
+                // Подсказки по управлению
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.ZoomIn,
+                                contentDescription = "Масштабирование",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Два пальца\nдля масштаба",
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.PanTool,
+                                contentDescription = "Перемещение",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Перемещайте\nдля позиции",
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Если не удалось загрузить изображение
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    Icons.Default.Error,
+                    contentDescription = "Ошибка",
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Не удалось загрузить изображение",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = onCancel) {
+                    Text("Вернуться назад")
+                }
+            }
+        }
+    }
+}
+
+// Вспомогательная функция для загрузки Bitmap из Uri
+fun loadBitmapFromUri(context: Context, uri: Uri): android.graphics.Bitmap? {
+    return try {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            android.graphics.BitmapFactory.decodeStream(stream)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
+// Вспомогательная функция для сохранения обрезанного Bitmap
+fun saveCroppedBitmap(context: Context, bitmap: android.graphics.Bitmap): String {
+    val timeStamp = System.currentTimeMillis()
+    val fileName = "meter_cropped_${timeStamp}.jpg"
+    val file = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), fileName)
+
+    try {
+        FileOutputStream(file).use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+            out.flush()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    return file.absolutePath
+}
+
+// Компоненты ниже остаются без изменений
 @Composable
 fun CompactSearchBar(
     searchQuery: String,
@@ -331,7 +1269,7 @@ fun CompactSearchBar(
             )
             Spacer(modifier = Modifier.width(10.dp))
 
-            TextField(
+            androidx.compose.material3.TextField(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
                 modifier = Modifier.weight(1f),
@@ -708,8 +1646,6 @@ fun CompactFiltersPanel(
         }
     }
 }
-
-
 
 @Composable
 fun CurrentSettingsInfo(
