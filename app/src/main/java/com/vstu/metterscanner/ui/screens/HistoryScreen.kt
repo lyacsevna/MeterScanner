@@ -1287,6 +1287,7 @@ fun saveCroppedBitmap(context: Context, bitmap: Bitmap): String {
 }
 
 
+
 // Компоненты ниже остаются без изменений
 @Composable
 fun CompactSearchBar(

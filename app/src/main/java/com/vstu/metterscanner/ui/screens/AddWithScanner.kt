@@ -48,7 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.vstu.metterscanner.MeterViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
@@ -220,6 +222,14 @@ fun CameraScanScreen(
                         val uri = Uri.fromFile(photoFile)
                         capturedImageUri = uri
                         photoPath = photoFile.absolutePath
+
+                        // Обрезаем изображение по области сканирования
+                        val croppedBitmap = cropImageToScanArea(context, uri, photoFile)
+
+                        // Сохраняем обрезанное изображение
+                        if (croppedBitmap != null) {
+                            ImageUtils.saveBitmapToFile(croppedBitmap, photoFile)
+                        }
 
                         // Используем TextRecognitionHelper для распознавания
                         val textResult = TextRecognitionHelper.recognizeTextFromUri(
@@ -1145,5 +1155,37 @@ fun loadBitmapFromFile(context: Context, filePath: String): Bitmap? {
     } catch (e: Exception) {
         e.printStackTrace()
         null
+    }
+}
+private suspend fun cropImageToScanArea(
+    context: Context,
+    uri: Uri,
+    photoFile: File
+): Bitmap? {
+    return withContext(Dispatchers.IO) {
+        try {
+            // Загружаем оригинальное изображение
+            val originalBitmap = ImageUtils.loadBitmapFromUri(context, uri) ?: return@withContext null
+
+            // Определяем область сканирования (координаты должны соответствовать Canvas)
+            // Эти значения должны совпадать с координатами в Canvas.drawRect
+            val canvasWidth = originalBitmap.width.toFloat()
+            val canvasHeight = originalBitmap.height.toFloat()
+            val scanWidth = canvasWidth * 0.8f
+            val scanHeight = scanWidth * 0.3f
+
+            val scanRect = android.graphics.Rect(
+                ((canvasWidth - scanWidth) / 2).toInt(),
+                ((canvasHeight - scanHeight) / 2).toInt(),
+                ((canvasWidth + scanWidth) / 2).toInt(),
+                ((canvasHeight + scanHeight) / 2).toInt()
+            )
+
+            // Обрезаем изображение
+            ImageUtils.cropToScanArea(context, uri, scanRect)
+        } catch (e: Exception) {
+            Log.e("CameraScanScreen", "Ошибка обрезки изображения: ${e.message}", e)
+            null
+        }
     }
 }

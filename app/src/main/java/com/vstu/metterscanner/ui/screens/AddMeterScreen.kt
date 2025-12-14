@@ -47,6 +47,7 @@ fun AddMeterScreen(
     var showCamera by remember { mutableStateOf(false) }
     var capturedPhotoPath by remember { mutableStateOf<String?>(null) }
     var showPhotoPreview by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
 
     val isFormValid by remember {
         derivedStateOf {
@@ -58,7 +59,7 @@ fun AddMeterScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
-    // Получаем последнее показание при изменении типа
+    // Получаем последнее показание при изменении типа только для отображения в карточке
     LaunchedEffect(selectedType) {
         lastMeter = viewModel.getLastMeter(selectedType)
     }
@@ -109,7 +110,7 @@ fun AddMeterScreen(
                     actions = {
                         IconButton(
                             onClick = { showCamera = true },
-                            enabled = !showCamera
+                            enabled = !showCamera && !isSaving
                         ) {
                             Icon(Icons.Default.CameraAlt, contentDescription = "Сканировать")
                         }
@@ -128,7 +129,7 @@ fun AddMeterScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Карточка с информацией о последнем показании
+                // Карточка с информацией о последнем показании (ТОЛЬКО ДЛЯ СПРАВКИ)
                 if (lastMeter != null) {
                     LastMeterCard(lastMeter!!)
                     Spacer(modifier = Modifier.height(16.dp))
@@ -164,7 +165,8 @@ fun AddMeterScreen(
                                             capturedPhotoPath = null
                                             showPhotoPreview = false
                                         },
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(24.dp),
+                                        enabled = !isSaving
                                     ) {
                                         Icon(
                                             Icons.Default.Close,
@@ -201,7 +203,7 @@ fun AddMeterScreen(
                     var expanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
                         expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
+                        onExpandedChange = { expanded = !expanded && !isSaving }
                     ) {
                         OutlinedTextField(
                             modifier = Modifier
@@ -215,7 +217,8 @@ fun AddMeterScreen(
                             },
                             onValueChange = {},
                             label = { Text("Выберите тип счетчика") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            enabled = !isSaving
                         )
 
                         ExposedDropdownMenu(
@@ -236,18 +239,12 @@ fun AddMeterScreen(
                                     onClick = {
                                         selectedType = type
                                         expanded = false
-                                        // Загружаем последнее показание для этого типа
+                                        // Только загружаем последнее показание для отображения в карточке
                                         coroutineScope.launch {
                                             lastMeter = viewModel.getLastMeter(type)
-                                            if (lastMeter != null) {
-                                                value = lastMeter!!.value.toString()
-                                                note = lastMeter!!.note
-                                            } else {
-                                                value = ""
-                                                note = ""
-                                            }
                                         }
-                                    }
+                                    },
+                                    enabled = !isSaving
                                 )
                             }
                         }
@@ -273,7 +270,8 @@ fun AddMeterScreen(
                         // Кнопка сканирования
                         OutlinedButton(
                             onClick = { showCamera = true },
-                            modifier = Modifier.height(36.dp)
+                            modifier = Modifier.height(36.dp),
+                            enabled = !isSaving
                         ) {
                             Icon(
                                 Icons.Default.CameraAlt,
@@ -288,11 +286,18 @@ fun AddMeterScreen(
                     OutlinedTextField(
                         value = value,
                         onValueChange = { newValue ->
-                            if (newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
+                            if (!isSaving && newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
                                 value = newValue
                             }
                         },
-                        label = { Text("Например: 1234.56") },
+                        label = {
+                            val unit = when (selectedType) {
+                                MeterType.ELECTRICITY -> "кВт·ч"
+                                MeterType.COLD_WATER -> "м³"
+                                MeterType.HOT_WATER -> "м³"
+                            }
+                            Text("Например: 1234.56 ($unit)")
+                        },
                         leadingIcon = {
                             Icon(Icons.Default.Edit, contentDescription = "Показания")
                         },
@@ -301,7 +306,8 @@ fun AddMeterScreen(
                             imeAction = ImeAction.Next
                         ),
                         modifier = Modifier.fillMaxWidth(),
-                        isError = value.isNotBlank() && value.toDoubleOrNull() == null
+                        isError = value.isNotBlank() && value.toDoubleOrNull() == null,
+                        enabled = !isSaving
                     )
 
                     if (value.isNotBlank() && value.toDoubleOrNull() == null) {
@@ -328,7 +334,7 @@ fun AddMeterScreen(
 
                     OutlinedTextField(
                         value = note,
-                        onValueChange = { note = it },
+                        onValueChange = { if (!isSaving) note = it },
                         label = { Text("Необязательно") },
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Text,
@@ -338,7 +344,8 @@ fun AddMeterScreen(
                             .fillMaxWidth()
                             .heightIn(min = 100.dp),
                         maxLines = 4,
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isSaving
                     )
                 }
 
@@ -349,10 +356,12 @@ fun AddMeterScreen(
                 ) {
                     Button(
                         onClick = {
-                            if (isFormValid) {
+                            if (isFormValid && !isSaving) {
+                                isSaving = true
                                 focusManager.clearFocus()
                                 val meterValue = value.toDouble()
 
+                                // Проверка, что новое значение больше предыдущего
                                 val lastValue = lastMeter?.value ?: 0.0
                                 if (meterValue < lastValue) {
                                     coroutineScope.launch {
@@ -361,6 +370,7 @@ fun AddMeterScreen(
                                             duration = SnackbarDuration.Long
                                         )
                                     }
+                                    isSaving = false
                                     return@Button
                                 }
 
@@ -378,13 +388,18 @@ fun AddMeterScreen(
                                             message = "Показание успешно сохранено!",
                                             duration = SnackbarDuration.Short
                                         )
-                                        kotlinx.coroutines.delay(1500)
+
+                                        // Короткая задержка для показа snackbar, затем автоматическое закрытие
+                                        kotlinx.coroutines.delay(800)
+
+                                        // Автоматически закрываем экран и возвращаемся на MainScreen
                                         navController.popBackStack()
                                     } catch (e: Exception) {
                                         snackbarHostState.showSnackbar(
                                             message = "Ошибка сохранения: ${e.message}",
                                             duration = SnackbarDuration.Long
                                         )
+                                        isSaving = false
                                     }
                                 }
                             }
@@ -392,24 +407,42 @@ fun AddMeterScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
-                        enabled = isFormValid,
+                        enabled = isFormValid && !isSaving,
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            text = "Сохранить показания",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        if (isSaving) {
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("Сохранение...")
+                            }
+                        } else {
+                            Text(
+                                text = "Сохранить показания",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedButton(
                         onClick = {
-                            navController.popBackStack()
+                            if (!isSaving) {
+                                navController.popBackStack()
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
+                            .height(48.dp),
+                        enabled = !isSaving
                     ) {
                         Text("Отмена")
                     }
@@ -439,7 +472,7 @@ fun LastMeterCard(lastMeter: Meter) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Последнее показание",
+                    text = "Предыдущее показание",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -478,7 +511,7 @@ fun LastMeterCard(lastMeter: Meter) {
                 }
 
                 Text(
-                    text = "${lastMeter.value}",
+                    text = "${lastMeter.value} ${getUnitForType(lastMeter.type)}",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -495,4 +528,3 @@ fun LastMeterCard(lastMeter: Meter) {
         }
     }
 }
-

@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -49,8 +50,15 @@ fun StatisticsScreen(
         calculateStatistics(meters, dateRange, selectedType)
     }
 
-    val chartData = remember(meters, dateRange, selectedType) {
-        prepareChartData(meters, dateRange, selectedType)
+    // Создаем данные для графика только если выбран конкретный тип
+    val chartData by remember(meters, dateRange, selectedType) {
+        derivedStateOf {
+            if (selectedType != null) {
+                prepareChartData(meters, dateRange, selectedType)
+            } else {
+                ChartData(emptyList(), dateRange, 0.0, 0.0)
+            }
+        }
     }
 
     Scaffold(
@@ -138,22 +146,65 @@ fun StatisticsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            InteractiveChart(
-                chartData = chartData,
-                period = selectedPeriod,
-                selectedType = selectedType,
-                onHover = { index -> hoveredIndex = index }
-            )
+            // Показываем график ТОЛЬКО когда выбран конкретный тип
+            if (selectedType != null) {
+                val currentSelectedType = selectedType!! // Можно использовать, так как мы проверили на null
 
-            hoveredIndex?.let { index ->
-                if (index < chartData.dataPoints.size) {
-                    val point = chartData.dataPoints[index]
-                    ChartTooltip(
-                        date = point.date,
-                        value = point.value,
-                        type = selectedType ?: MeterType.ELECTRICITY,
-                        consumption = point.consumption
+                InteractiveChart(
+                    chartData = chartData,
+                    period = selectedPeriod,
+                    selectedType = currentSelectedType,
+                    onHover = { index -> hoveredIndex = index }
+                )
+
+                hoveredIndex?.let { index ->
+                    if (index < chartData.dataPoints.size) {
+                        val point = chartData.dataPoints[index]
+                        ChartTooltip(
+                            date = point.date,
+                            value = point.value,
+                            type = currentSelectedType,
+                            consumption = point.consumption
+                        )
+                    }
+                }
+            } else {
+                // Показываем сообщение, если не выбран тип
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
                     )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.BarChart,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Выберите тип счетчика",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Для отображения графика динамики выберите конкретный тип счетчика",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
 
@@ -166,7 +217,6 @@ fun StatisticsScreen(
         }
     }
 }
-
 @Composable
 fun InteractivePieChart(
     distribution: Map<MeterType, Double>,
@@ -959,6 +1009,7 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Всегда показываем сравнение
             ComparisonItem(
                 current = data.comparison.currentConsumption,
                 previous = data.comparison.previousConsumption,
@@ -967,6 +1018,7 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Показываем распределение только если выбраны все типы
             if (selectedType == null && data.distribution.isNotEmpty()) {
                 Text(
                     text = "Распределение по типам",
@@ -978,6 +1030,7 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
 
                 data.distribution.forEach { (type, value) ->
                     DistributionRow(type, value, data.kpi.consumption)
+                    Spacer(modifier = Modifier.height(4.dp))
                 }
             }
         }
@@ -1200,15 +1253,17 @@ fun calculateStatistics(
     dateRange: DateRange,
     selectedType: MeterType?
 ): StatisticsData {
-    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+    val allMetersSorted = meters.sortedBy { parseMeterDateTime(it.date) }
 
-    val filtered = meters.filter { meter ->
-        val meterDate = LocalDate.parse(meter.date.substringBefore(" "), DateTimeFormatter.ISO_LOCAL_DATE)
-        (meterDate.isAfter(dateRange.start.minusDays(1)) && meterDate.isBefore(dateRange.end.plusDays(1))) &&
+    // Получаем все показания за период для выбранных типов
+    val periodMeters = meters.filter { meter ->
+        val meterDateTime = parseMeterDateTime(meter.date)
+        meterDateTime.isAfter(dateRange.start.atStartOfDay().minusSeconds(1)) &&
+                meterDateTime.isBefore(dateRange.end.plusDays(1).atStartOfDay()) &&
                 (selectedType == null || meter.type == selectedType)
     }
 
-    if (filtered.isEmpty()) {
+    if (periodMeters.isEmpty()) {
         return StatisticsData(
             kpi = KpiData(0.0, 0.0, 0.0, selectedType?.getUnit()),
             comparison = ComparisonData(0.0, 0.0, 0.0),
@@ -1216,51 +1271,97 @@ fun calculateStatistics(
         )
     }
 
-    val consumptionByType = mutableMapOf<MeterType, Double>()
-    val distribution = mutableMapOf<MeterType, Double>()
-
     val types = if (selectedType != null) listOf(selectedType) else MeterType.values().toList()
+    val consumptionByType = mutableMapOf<MeterType, Double>()
 
     types.forEach { type ->
-        val typeMeters = filtered.filter { it.type == type }.sortedBy { it.date }
+        // Получаем все показания этого типа
+        val allTypeMeters = allMetersSorted.filter { it.type == type }
 
-        if (typeMeters.size >= 2) {
-            val firstReading = typeMeters.first()
-            val lastReading = typeMeters.last()
-            val consumption = lastReading.value - firstReading.value
-
-            consumptionByType[type] = max(0.0, consumption)
-            distribution[type] = consumption
-        } else {
+        if (allTypeMeters.isEmpty()) {
             consumptionByType[type] = 0.0
-            distribution[type] = 0.0
+            return@forEach
         }
+
+        // Получаем показания этого типа за период
+        val typePeriodMeters = periodMeters.filter { it.type == type }.sortedBy { parseMeterDateTime(it.date) }
+
+        if (typePeriodMeters.isEmpty()) {
+            consumptionByType[type] = 0.0
+            return@forEach
+        }
+
+        // Находим первое показание перед началом периода
+        val firstReadingBeforePeriod = allTypeMeters
+            .filter { parseMeterDateTime(it.date).isBefore(dateRange.start.atStartOfDay()) }
+            .lastOrNull()
+
+        // Первое показание в периоде
+        val firstReadingInPeriod = typePeriodMeters.first()
+        val lastReadingInPeriod = typePeriodMeters.last()
+
+        // Определяем начальное значение для расчета расхода
+        val startValue = if (firstReadingBeforePeriod != null &&
+            parseMeterDateTime(firstReadingBeforePeriod.date).isBefore(parseMeterDateTime(firstReadingInPeriod.date))) {
+            firstReadingBeforePeriod.value
+        } else {
+            // Если нет показаний до периода, начинаем с первого в периоде
+            firstReadingInPeriod.value
+        }
+
+        val endValue = lastReadingInPeriod.value
+        val consumption = max(0.0, endValue - startValue)
+
+        consumptionByType[type] = consumption
     }
 
     val totalConsumption = consumptionByType.values.sum()
 
+    // Рассчитываем количество дней в периоде
     val days = ChronoUnit.DAYS.between(dateRange.start, dateRange.end).coerceAtLeast(1).toDouble()
 
+    // Получаем предыдущий период
     val previousDateRange = getPreviousDateRange(dateRange)
-    val previousConsumption = calculateConsumptionForPeriod(meters, previousDateRange, selectedType)
 
-    val savings = previousConsumption - totalConsumption
+    // Рассчитываем потребление за предыдущий период
+    val previousConsumption = if (previousDateRange.start.isBefore(previousDateRange.end)) {
+        calculateConsumptionForPeriod(meters, previousDateRange, selectedType)
+    } else {
+        0.0
+    }
+
+    // Рассчитываем экономию (положительная - экономия, отрицательная - перерасход)
+    val savings = if (previousConsumption > 0) {
+        previousConsumption - totalConsumption
+    } else {
+        0.0
+    }
+
+    // Определяем единицу измерения для KPI
+    val unit = if (selectedType != null) {
+        selectedType.getUnit()
+    } else {
+        // При выборе всех типов показываем общий расход без единиц
+        "ед."
+    }
 
     return StatisticsData(
         kpi = KpiData(
             consumption = totalConsumption,
-            averagePerDay = totalConsumption / days,
+            averagePerDay = if (days > 0) totalConsumption / days else 0.0,
             savings = savings,
-            unit = selectedType?.getUnit()
+            unit = unit
         ),
         comparison = ComparisonData(
             currentConsumption = totalConsumption,
             previousConsumption = previousConsumption,
-            changePercentage = if (previousConsumption > 0)
+            changePercentage = if (previousConsumption > 0) {
                 ((totalConsumption - previousConsumption) / previousConsumption * 100)
-            else 0.0
+            } else {
+                0.0
+            }
         ),
-        distribution = distribution.filter { it.value > 0 }
+        distribution = consumptionByType.filter { it.value > 0 }
     )
 }
 
@@ -1269,88 +1370,166 @@ fun prepareChartData(
     dateRange: DateRange,
     selectedType: MeterType?
 ): ChartData {
+    // Получаем все метры отсортированные по дате
+    val allMetersSorted = meters.sortedBy { parseMeterDateTime(it.date) }
+
+    // Фильтруем метры за период
     val filtered = meters.filter { meter ->
-        val meterDate = parseMeterDate(meter.date)
-        meterDate.isAfter(dateRange.start.atStartOfDay()) &&
-                meterDate.isBefore(dateRange.end.plusDays(1).atStartOfDay()) &&
+        val meterDateTime = parseMeterDateTime(meter.date)
+        meterDateTime.isAfter(dateRange.start.atStartOfDay().minusSeconds(1)) &&
+                meterDateTime.isBefore(dateRange.end.plusDays(1).atStartOfDay()) &&
                 (selectedType == null || meter.type == selectedType)
     }
 
-    val groupedByDay = filtered
-        .groupBy { it.date.substringBefore(" ") }
-        .mapValues { (_, dayMeters) ->
-            dayMeters.sortedBy { it.date }.lastOrNull()
-        }
-        .values
-        .filterNotNull()
-        .sortedBy { it.date }
-
-    if (groupedByDay.isEmpty()) {
+    if (filtered.isEmpty()) {
         return ChartData(emptyList(), dateRange, 0.0, 0.0)
     }
 
+    // Группируем по типу
+    val types = if (selectedType != null) listOf(selectedType) else MeterType.values().toList()
+
     val dataPoints = mutableListOf<ChartPoint>()
-    var previousValue: Double? = null
 
-    groupedByDay.forEachIndexed { index, meter ->
-        val currentValue = meter.value
-        val consumption = if (previousValue != null) max(0.0, currentValue - previousValue!!) else 0.0
+    types.forEach { type ->
+        // Получаем все метры этого типа
+        val allTypeMeters = allMetersSorted.filter { it.type == type }
 
-        dataPoints.add(
-            ChartPoint(
-                date = meter.date,
-                dateShort = formatDateShort(meter.date, dateRange),
-                value = currentValue,
-                consumption = consumption,
-                index = index
+        if (allTypeMeters.isEmpty()) return@forEach
+
+        // Фильтруем метры этого типа за период
+        val periodTypeMeters = filtered.filter { it.type == type }.sortedBy { parseMeterDateTime(it.date) }
+
+        if (periodTypeMeters.isEmpty()) return@forEach
+
+        // Находим первое показание перед периодом
+        val firstReadingBeforePeriod = allTypeMeters
+            .filter { parseMeterDateTime(it.date).isBefore(dateRange.start.atStartOfDay()) }
+            .lastOrNull()
+
+        var previousValue = if (firstReadingBeforePeriod != null &&
+            parseMeterDateTime(firstReadingBeforePeriod.date).isBefore(parseMeterDateTime(periodTypeMeters.first().date))) {
+            firstReadingBeforePeriod.value
+        } else {
+            periodTypeMeters.first().value
+        }
+
+        // Создаем точки для каждого показания в периоде
+        periodTypeMeters.forEachIndexed { index, meter ->
+            val currentValue = meter.value
+            val consumption = max(0.0, currentValue - previousValue)
+
+            dataPoints.add(
+                ChartPoint(
+                    date = meter.date,
+                    dateShort = formatDateShort(meter.date, dateRange),
+                    value = currentValue,
+                    consumption = consumption,
+                    index = dataPoints.size
+                )
             )
-        )
 
-        previousValue = currentValue
+            previousValue = currentValue
+        }
     }
 
-    val values = dataPoints.map { it.value }
+    // Сортируем все точки по дате
+    val sortedDataPoints = dataPoints.sortedBy { parseMeterDateTime(it.date) }
+
+    if (sortedDataPoints.isEmpty()) {
+        return ChartData(emptyList(), dateRange, 0.0, 0.0)
+    }
+
+    val values = sortedDataPoints.map { it.value }
     return ChartData(
-        dataPoints = dataPoints,
+        dataPoints = sortedDataPoints,
         dateRange = dateRange,
         minValue = values.minOrNull() ?: 0.0,
         maxValue = values.maxOrNull() ?: 0.0
     )
 }
 
+fun parseMeterDateTime(dateString: String): LocalDateTime {
+    val formats = listOf(
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd"),
+        DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"),
+        DateTimeFormatter.ofPattern("dd.MM.yyyy")
+    )
+
+    for (formatter in formats) {
+        try {
+            return LocalDateTime.parse(dateString, formatter)
+        } catch (e: Exception) {
+            try {
+                return LocalDate.parse(dateString, formatter).atStartOfDay()
+            } catch (e2: Exception) {
+                continue
+            }
+        }
+    }
+
+
+    return try {
+        LocalDateTime.parse(dateString)
+    } catch (e: Exception) {
+        LocalDateTime.now()
+    }
+}
 fun calculateConsumptionForPeriod(
     meters: List<Meter>,
     dateRange: DateRange,
     selectedType: MeterType?
 ): Double {
-    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+    val allMetersSorted = meters.sortedBy { parseMeterDateTime(it.date) }
 
-    val filtered = meters.filter { meter ->
-        val meterDate = LocalDate.parse(meter.date.substringBefore(" "), DateTimeFormatter.ISO_LOCAL_DATE)
-        (meterDate.isAfter(dateRange.start.minusDays(1)) && meterDate.isBefore(dateRange.end.plusDays(1))) &&
+    // Получаем метры за период
+    val periodMeters = meters.filter { meter ->
+        val meterDateTime = parseMeterDateTime(meter.date)
+        meterDateTime.isAfter(dateRange.start.atStartOfDay().minusSeconds(1)) &&
+                meterDateTime.isBefore(dateRange.end.plusDays(1).atStartOfDay()) &&
                 (selectedType == null || meter.type == selectedType)
     }
 
-    if (filtered.isEmpty()) return 0.0
+    if (periodMeters.isEmpty()) return 0.0
 
     val types = if (selectedType != null) listOf(selectedType) else MeterType.values().toList()
+    var totalConsumption = 0.0
 
-    return types.sumOf { type ->
-        val typeMeters = filtered.filter { it.type == type }.sortedBy { it.date }
-        if (typeMeters.size >= 2) {
-            val firstReading = typeMeters.first()
-            val lastReading = typeMeters.last()
-            max(0.0, lastReading.value - firstReading.value)
+    types.forEach { type ->
+        val allTypeMeters = allMetersSorted.filter { it.type == type }
+
+        if (allTypeMeters.isEmpty()) return@forEach
+
+        val typePeriodMeters = periodMeters.filter { it.type == type }.sortedBy { parseMeterDateTime(it.date) }
+
+        if (typePeriodMeters.isEmpty()) return@forEach
+
+        // Находим первое показание перед периодом
+        val firstReadingBeforePeriod = allTypeMeters
+            .filter { parseMeterDateTime(it.date).isBefore(dateRange.start.atStartOfDay()) }
+            .lastOrNull()
+
+        val firstReadingInPeriod = typePeriodMeters.first()
+        val lastReadingInPeriod = typePeriodMeters.last()
+
+        val startValue = if (firstReadingBeforePeriod != null &&
+            parseMeterDateTime(firstReadingBeforePeriod.date).isBefore(parseMeterDateTime(firstReadingInPeriod.date))) {
+            firstReadingBeforePeriod.value
         } else {
-            0.0
+            firstReadingInPeriod.value
         }
-    }
-}
 
+        val endValue = lastReadingInPeriod.value
+
+        totalConsumption += max(0.0, endValue - startValue)
+    }
+
+    return totalConsumption
+}
 fun getPreviousDateRange(currentRange: DateRange): DateRange {
-    val duration = ChronoUnit.DAYS.between(currentRange.start, currentRange.end)
+    val daysBetween = ChronoUnit.DAYS.between(currentRange.start, currentRange.end).coerceAtLeast(1)
     return DateRange(
-        start = currentRange.start.minusDays(duration),
+        start = currentRange.start.minusDays(daysBetween),
         end = currentRange.start.minusDays(1)
     )
 }
