@@ -147,8 +147,18 @@ fun CameraScanScreen(
                                 // Берем наиболее вероятное показание (самое длинное)
                                 val selectedNumber = filteredNumbers.maxByOrNull { it.replace(".", "").length }
                                 manualInput = selectedNumber ?: ""
+
+                                // ДОБАВЛЕНО: АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ПРИ ХОРОШЕМ РАСПОЗНАВАНИИ
+                                if (selectedNumber != null && selectedNumber.isNotBlank()) {
+                                    // Автоматически используем распознанное значение через 1 секунду
+                                    coroutineScope.launch {
+                                        kotlinx.coroutines.delay(1000)
+                                        onResult(selectedNumber, photoFile.absolutePath)
+                                    }
+                                }
                             } else {
                                 manualInput = ""
+                                // Нет подходящих чисел - ждем ручного ввода
                             }
                             isScanning = false
                         }
@@ -793,6 +803,7 @@ private fun recognizeTextFromImage(
             val image = com.google.mlkit.vision.common.InputImage.fromBitmap(fullBitmap, 0)
             recognizer.process(image)
                 .addOnSuccessListener { visionText ->
+                    Log.d("TextRecognition", "РАСПОЗНАННЫЙ ТЕКСТ (полное изображение): ${visionText.text}")
                     onResult(visionText.text)
                 }
                 .addOnFailureListener { e ->
@@ -847,7 +858,14 @@ private fun recognizeTextFromImage(
         recognizer.process(image)
             .addOnSuccessListener { visionText ->
                 val resultText = visionText.text
-                Log.d("TextRecognition", "Распознанный текст ИЗ ОБЛАСТИ СКАНИРОВАНИЯ: $resultText")
+                Log.d("TextRecognition", "РАСПОЗНАННЫЙ ТЕКСТ ИЗ ОБЛАСТИ СКАНИРОВАНИЯ: $resultText")
+
+                // Логируем все блоки текста для отладки
+                for (block in visionText.textBlocks) {
+                    Log.d("TextRecognition", "Блок текста: ${block.text}")
+                    Log.d("TextRecognition", "Координаты блока: ${block.boundingBox}")
+                }
+
                 onResult(resultText)
             }
             .addOnFailureListener { e ->
@@ -890,10 +908,10 @@ private fun extractNumbersFromText(text: String): List<String> {
 
     // Ищем числа в форматах: 1234, 1234.56, 1,234.56
     val patterns = listOf(
-        """\b\d{4,8}\b""",                     // 1234567
+        """\b\d{3,9}\b""",                     // 1234567 (3-9 цифр)
         """\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b""", // 1,234.56
         """\b\d+\.\d{1,3}\b""",                 // 1234.56
-        """\b\d{4,8}[\.,]\d{1,3}\b"""           // 1234,56 или 1234.56
+        """\b\d{3,9}[\.,]\d{1,3}\b"""           // 1234,56 или 1234.56
     )
 
     val results = mutableListOf<String>()
@@ -919,8 +937,8 @@ private fun filterMeterReadings(numbers: List<String>): List<String> {
         val cleanNumber = removeLeadingZeros(number)
         val digitCount = cleanNumber.replace(".", "").length
 
-        // Типичные показания счетчика: 4-8 цифр, может быть точка/запятая
-        digitCount in 4..8 && cleanNumber.replace(".", "").toDoubleOrNull() != null
+        // УВЕЛИЧЕННЫЙ ДИАПАЗОН: счетчики могут иметь от 3 до 9 цифр
+        digitCount in 3..9 && cleanNumber.replace(".", "").toDoubleOrNull() != null
     }.distinct()
 }
 

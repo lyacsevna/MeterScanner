@@ -66,11 +66,20 @@ fun AddMeterScreen(
     if (showCamera) {
         CameraScanScreen(
             onResult = { scannedValue, photoPath ->
+                // АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПОЛЯ ПРИ ПОЛУЧЕНИИ РЕЗУЛЬТАТА
                 value = scannedValue
                 capturedPhotoPath = photoPath
                 showCamera = false
                 if (photoPath != null) {
                     showPhotoPreview = true
+                }
+
+                // Показать уведомление, что значение обновлено
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(
+                        message = "Значение распознано и установлено: $scannedValue",
+                        duration = SnackbarDuration.Short
+                    )
                 }
             },
             onCancel = {
@@ -489,3 +498,4 @@ fun LastMeterCard(lastMeter: Meter) {
         }
     }
 }
+

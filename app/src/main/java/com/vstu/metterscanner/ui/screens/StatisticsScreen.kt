@@ -12,13 +12,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.vstu.metterscanner.MeterViewModel
@@ -28,9 +27,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,9 +39,14 @@ fun StatisticsScreen(
     var selectedPeriod by remember { mutableStateOf(Period.MONTHLY) }
     var selectedType by remember { mutableStateOf<MeterType?>(null) }
     var dateRange by remember { mutableStateOf(getDefaultDateRange(selectedPeriod)) }
+    var hoveredIndex by remember { mutableStateOf<Int?>(null) }
 
     val statisticsData = remember(meters, dateRange, selectedType) {
         calculateStatistics(meters, dateRange, selectedType)
+    }
+
+    val chartData = remember(meters, dateRange, selectedType) {
+        prepareChartData(meters, dateRange, selectedType)
     }
 
     Scaffold(
@@ -101,16 +103,30 @@ fun StatisticsScreen(
                 onPeriodChange = { period ->
                     selectedPeriod = period
                     dateRange = getDefaultDateRange(period)
+                    hoveredIndex = null
                 }
             )
 
             KpiCards(statisticsData.kpi, selectedType)
 
-            ConsumptionChart(
-                meters = if (selectedType != null) meters.filter { it.type == selectedType } else meters,
+            InteractiveChart(
+                chartData = chartData,
                 period = selectedPeriod,
-                selectedType = selectedType
+                selectedType = selectedType,
+                onHover = { index -> hoveredIndex = index }
             )
+
+            hoveredIndex?.let { index ->
+                if (index < chartData.dataPoints.size) {
+                    val point = chartData.dataPoints[index]
+                    ChartTooltip(
+                        date = point.date,
+                        value = point.value,
+                        type = selectedType ?: MeterType.ELECTRICITY,
+                        consumption = point.consumption
+                    )
+                }
+            }
 
             StatisticsDetails(statisticsData, selectedType)
 
@@ -197,7 +213,8 @@ fun KpiCards(kpi: KpiData, selectedType: MeterType?) {
             value = String.format("%.1f", kpi.savings),
             unit = kpi.unit ?: "ед.",
             icon = Icons.Default.Star,
-            color = MaterialTheme.colorScheme.tertiary
+            color = MaterialTheme.colorScheme.tertiary,
+            isPositive = kpi.savings >= 0
         )
     }
 }
@@ -208,7 +225,8 @@ fun KpiCard(
     value: String,
     unit: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    color: Color
+    color: Color,
+    isPositive: Boolean = true
 ) {
     Card(
         colors = CardDefaults.cardColors(
@@ -243,7 +261,10 @@ fun KpiCard(
             Text(
                 text = value,
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = if (title == "Экономия") {
+                    if (isPositive) Color(0xFF4CAF50) else Color(0xFFF44336)
+                } else MaterialTheme.colorScheme.onSurface
             )
 
             Text(
@@ -256,11 +277,14 @@ fun KpiCard(
 }
 
 @Composable
-fun ConsumptionChart(
-    meters: List<Meter>,
+fun InteractiveChart(
+    chartData: ChartData,
     period: Period,
-    selectedType: MeterType?
+    selectedType: MeterType?,
+    onHover: (Int?) -> Unit
 ) {
+    var hoveredIndex by remember { mutableStateOf<Int?>(null) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -300,16 +324,208 @@ fun ConsumptionChart(
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = getPeriodLabel(period, chartData.dateRange),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            val filteredMeters = if (selectedType != null) meters.filter { it.type == selectedType } else meters
-            if (filteredMeters.size >= 2) {
-                ReadingsChart(filteredMeters, selectedType ?: MeterType.ELECTRICITY)
+            if (chartData.dataPoints.size >= 2) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(250.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant,
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(16.dp)
+                ) {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val x = event.changes.first().position.x
+                                        val y = event.changes.first().position.y
+
+                                        val index = calculateHoveredIndex(
+                                            x = x,
+                                            y = y,
+                                            chartData = chartData,
+                                            canvasSize = size
+                                        )
+
+                                        hoveredIndex = index
+                                        onHover(index)
+                                    }
+                                }
+                            }
+                    ) {
+                        val dataPoints = chartData.dataPoints
+                        if (dataPoints.size < 2) return@Canvas
+
+                        val padding = 48f
+                        val chartWidth = size.width - padding * 2
+                        val chartHeight = size.height - padding * 2
+
+                        val minValue = dataPoints.minOf { it.value }
+                        val maxValue = dataPoints.maxOf { it.value }
+                        val valueRange = (maxValue - minValue).coerceAtLeast(1.0)
+
+                        // Создаем точки для графика
+                        val points = dataPoints.mapIndexed { index, point ->
+                            val x = padding + (chartWidth * index / (dataPoints.size - 1))
+                            val y = size.height - padding - (chartHeight * (point.value - minValue) / valueRange).toFloat()
+                            PointData(x, y, point)
+                        }
+
+                        // Рисуем оси
+                        drawLine(
+                            color = Color.Gray.copy(alpha = 0.5f),
+                            start = Offset(padding, size.height - padding),
+                            end = Offset(size.width - padding, size.height - padding),
+                            strokeWidth = 2f
+                        )
+
+                        drawLine(
+                            color = Color.Gray.copy(alpha = 0.5f),
+                            start = Offset(padding, padding),
+                            end = Offset(padding, size.height - padding),
+                            strokeWidth = 2f
+                        )
+
+                        // Рисуем сетку
+                        for (i in 0..5) {
+                            val x = padding + (chartWidth * i / 5)
+                            drawLine(
+                                color = Color.Gray.copy(alpha = 0.2f),
+                                start = Offset(x, padding),
+                                end = Offset(x, size.height - padding),
+                                strokeWidth = 1f
+                            )
+                        }
+
+                        for (i in 0..5) {
+                            val y = size.height - padding - (chartHeight * i / 5)
+                            drawLine(
+                                color = Color.Gray.copy(alpha = 0.2f),
+                                start = Offset(padding, y),
+                                end = Offset(size.width - padding, y),
+                                strokeWidth = 1f
+                            )
+                        }
+
+                        // Рисуем линию графика
+                        val path = Path().apply {
+                            moveTo(points.first().x, points.first().y)
+                            points.drop(1).forEach { point ->
+                                lineTo(point.x, point.y)
+                            }
+                        }
+
+                        drawPath(
+                            path = path,
+                            color = getColorForType(selectedType ?: MeterType.ELECTRICITY),
+                            style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+
+                        // Рисуем точки
+                        points.forEachIndexed { index, point ->
+                            val radius = if (index == hoveredIndex) 8f else 4f
+                            val color = getColorForType(selectedType ?: MeterType.ELECTRICITY)
+                                .copy(alpha = if (index == hoveredIndex) 1f else 0.7f)
+
+                            drawCircle(
+                                color = color,
+                                center = Offset(point.x, point.y),
+                                radius = radius
+                            )
+                        }
+
+                        // Подписи оси X
+                        val step = max(1, dataPoints.size / 5)
+                        dataPoints.forEachIndexed { index, point ->
+                            if (index % step == 0 || index == dataPoints.size - 1) {
+                                val x = padding + (chartWidth * index / (dataPoints.size - 1))
+
+                                drawContext.canvas.nativeCanvas.apply {
+                                    drawText(
+                                        point.dateShort,
+                                        x,
+                                        size.height - padding + 20,
+                                        android.graphics.Paint().apply {
+                                            color = android.graphics.Color.GRAY
+                                            textSize = 10f
+                                            textAlign = android.graphics.Paint.Align.CENTER
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Подписи оси Y
+                        for (i in 0..5) {
+                            val y = size.height - padding - (chartHeight * i / 5)
+                            val value = minValue + (maxValue - minValue) * i / 5
+
+                            drawContext.canvas.nativeCanvas.apply {
+                                drawText(
+                                    String.format("%.0f", value),
+                                    padding - 25,
+                                    y + 4,
+                                    android.graphics.Paint().apply {
+                                        color = android.graphics.Color.GRAY
+                                        textSize = 10f
+                                        textAlign = android.graphics.Paint.Align.RIGHT
+                                    }
+                                )
+                            }
+                        }
+
+                        // Подсветка наведенной точки
+                        hoveredIndex?.let { index ->
+                            if (index < points.size) {
+                                val point = points[index]
+
+                                // Вертикальная линия
+                                drawLine(
+                                    color = Color.Gray.copy(alpha = 0.3f),
+                                    start = Offset(point.x, 0f),
+                                    end = Offset(point.x, point.y),
+                                    strokeWidth = 1f
+                                )
+
+                                // Горизонтальная линия
+                                drawLine(
+                                    color = Color.Gray.copy(alpha = 0.3f),
+                                    start = Offset(0f, point.y),
+                                    end = Offset(point.x, point.y),
+                                    strokeWidth = 1f
+                                )
+
+                                // Подсветка точки
+                                drawCircle(
+                                    color = getColorForType(selectedType ?: MeterType.ELECTRICITY),
+                                    center = Offset(point.x, point.y),
+                                    radius = 12f,
+                                    style = Stroke(width = 2f)
+                                )
+                            }
+                        }
+                    }
+                }
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp),
+                        .height(200.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -323,84 +539,73 @@ fun ConsumptionChart(
 }
 
 @Composable
-fun ReadingsChart(meters: List<Meter>, type: MeterType) {
-    val sorted = meters.sortedBy { it.date }
-
-    // Вычисляем разницы между последовательными показаниями
-    val differences = if (sorted.size >= 2) {
-        sorted.windowed(2) { pair ->
-            val (prev, curr) = pair
-            curr.value - prev.value
-        }
-    } else {
-        emptyList()
-    }
-
-    Box(
+fun ChartTooltip(
+    date: String,
+    value: Double,
+    type: MeterType,
+    consumption: Double
+) {
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(200.dp)
-            .background(
-                MaterialTheme.colorScheme.surfaceVariant,
-                RoundedCornerShape(8.dp)
-            )
-            .padding(12.dp)
+            .padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            if (differences.isEmpty()) return@Canvas
-
-            val padding = 40f
-            val chartWidth = size.width - padding * 2
-            val chartHeight = size.height - padding * 2
-
-            val maxVal = differences.maxOrNull() ?: 1.0
-            val minVal = differences.minOrNull() ?: 0.0
-            val range = (maxVal - minVal).coerceAtLeast(1.0)
-
-            val points = differences.mapIndexed { index, value ->
-                val x = padding + (chartWidth * index / (differences.size - 1))
-                val y = size.height - padding - (chartHeight * (value - minVal) / range).toFloat()
-                Offset(x.toFloat(), y)
-            }
-
-            // Линия графика
-            val path = Path().apply {
-                moveTo(points.first().x, points.first().y)
-                points.drop(1).forEach { lineTo(it.x, it.y) }
-            }
-
-            drawPath(
-                path = path,
-                color = getColorForType(type),
-                style = Stroke(width = 3f, cap = StrokeCap.Round)
-            )
-
-            // Точки
-            points.forEach { point ->
-                drawCircle(
-                    color = getColorForType(type),
-                    center = point,
-                    radius = 4f
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = date,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "Показание: ${String.format("%.1f", value)} ${type.getUnit()}",
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
 
-            // Ось X (время)
-            drawLine(
-                color = Color.Gray,
-                start = Offset(padding, size.height - padding),
-                end = Offset(size.width - padding, size.height - padding),
-                strokeWidth = 1f
-            )
-
-            // Ось Y (значения)
-            drawLine(
-                color = Color.Gray,
-                start = Offset(padding, padding),
-                end = Offset(padding, size.height - padding),
-                strokeWidth = 1f
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "Расход: ${String.format("%.1f", consumption)} ${type.getUnit()}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                    text = type.getDisplayName(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = getColorForType(type)
+                )
+            }
         }
     }
+}
+
+private fun calculateHoveredIndex(
+    x: Float,
+    y: Float,
+    chartData: ChartData,
+    canvasSize: IntSize
+): Int? {
+    val padding = 48f
+    val chartWidth = canvasSize.width - padding * 2
+
+    if (x < padding || x > canvasSize.width - padding ||
+        y < padding || y > canvasSize.height - padding) {
+        return null
+    }
+
+    val relativeX = (x - padding) / chartWidth
+    val index = (relativeX * (chartData.dataPoints.size - 1)).toInt()
+
+    return index.coerceIn(0, chartData.dataPoints.size - 1)
 }
 
 @Composable
@@ -422,7 +627,6 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Сравнение с предыдущим периодом
             ComparisonItem(
                 current = data.comparison.currentConsumption,
                 previous = data.comparison.previousConsumption,
@@ -431,10 +635,9 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Распределение (если не выбран тип)
             if (selectedType == null && data.distribution.isNotEmpty()) {
                 Text(
-                    text = "Расход по типам",
+                    text = "Распределение по типам",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium
                 )
@@ -615,16 +818,38 @@ data class StatisticsData(
 )
 
 data class KpiData(
-    val consumption: Double,           // Общий расход за период
-    val averagePerDay: Double,         // Средний расход в день
-    val savings: Double,               // Экономия/перерасход по сравнению с предыдущим периодом
-    val unit: String?                  // Единица измерения
+    val consumption: Double,
+    val averagePerDay: Double,
+    val savings: Double,
+    val unit: String?
 )
 
 data class ComparisonData(
-    val currentConsumption: Double,    // Расход в текущем периоде
-    val previousConsumption: Double,   // Расход в предыдущем периоде
-    val changePercentage: Double       // Процент изменения
+    val currentConsumption: Double,
+    val previousConsumption: Double,
+    val changePercentage: Double
+)
+
+// Новые структуры данных для графика
+data class ChartPoint(
+    val date: String,
+    val dateShort: String,
+    val value: Double,
+    val consumption: Double,
+    val index: Int
+)
+
+data class ChartData(
+    val dataPoints: List<ChartPoint>,
+    val dateRange: DateRange,
+    val minValue: Double,
+    val maxValue: Double
+)
+
+private data class PointData(
+    val x: Float,
+    val y: Float,
+    val chartPoint: ChartPoint
 )
 
 // Вспомогательные функции
@@ -645,7 +870,6 @@ fun calculateStatistics(
 ): StatisticsData {
     val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    // Фильтруем по дате и типу
     val filtered = meters.filter { meter ->
         val meterDate = LocalDate.parse(meter.date.substringBefore(" "), DateTimeFormatter.ISO_LOCAL_DATE)
         (meterDate.isAfter(dateRange.start.minusDays(1)) && meterDate.isBefore(dateRange.end.plusDays(1))) &&
@@ -660,7 +884,6 @@ fun calculateStatistics(
         )
     }
 
-    // Группируем по типу и вычисляем расход для каждого типа
     val consumptionByType = mutableMapOf<MeterType, Double>()
     val distribution = mutableMapOf<MeterType, Double>()
 
@@ -670,7 +893,6 @@ fun calculateStatistics(
         val typeMeters = filtered.filter { it.type == type }.sortedBy { it.date }
 
         if (typeMeters.size >= 2) {
-            // Вычисляем разницу между первым и последним показанием за период
             val firstReading = typeMeters.first()
             val lastReading = typeMeters.last()
             val consumption = lastReading.value - firstReading.value
@@ -683,13 +905,10 @@ fun calculateStatistics(
         }
     }
 
-    // Общий расход
     val totalConsumption = consumptionByType.values.sum()
 
-    // Длительность периода в днях
     val days = ChronoUnit.DAYS.between(dateRange.start, dateRange.end).coerceAtLeast(1).toDouble()
 
-    // Вычисляем предыдущий период для сравнения
     val previousDateRange = getPreviousDateRange(dateRange)
     val previousConsumption = calculateConsumptionForPeriod(meters, previousDateRange, selectedType)
 
@@ -713,7 +932,60 @@ fun calculateStatistics(
     )
 }
 
-// Вычисляет расход для заданного периода
+fun prepareChartData(
+    meters: List<Meter>,
+    dateRange: DateRange,
+    selectedType: MeterType?
+): ChartData {
+    val filtered = meters.filter { meter ->
+        val meterDate = parseMeterDate(meter.date)
+        meterDate.isAfter(dateRange.start.atStartOfDay()) &&
+                meterDate.isBefore(dateRange.end.plusDays(1).atStartOfDay()) &&
+                (selectedType == null || meter.type == selectedType)
+    }
+
+    val groupedByDay = filtered
+        .groupBy { it.date.substringBefore(" ") }
+        .mapValues { (_, dayMeters) ->
+            dayMeters.sortedBy { it.date }.lastOrNull()
+        }
+        .values
+        .filterNotNull()
+        .sortedBy { it.date }
+
+    if (groupedByDay.isEmpty()) {
+        return ChartData(emptyList(), dateRange, 0.0, 0.0)
+    }
+
+    val dataPoints = mutableListOf<ChartPoint>()
+    var previousValue: Double? = null
+
+    groupedByDay.forEachIndexed { index, meter ->
+        val currentValue = meter.value
+        val consumption = if (previousValue != null) max(0.0, currentValue - previousValue!!) else 0.0
+
+        dataPoints.add(
+            ChartPoint(
+                date = meter.date,
+                dateShort = formatDateShort(meter.date, dateRange),
+                value = currentValue,
+                consumption = consumption,
+                index = index
+            )
+        )
+
+        previousValue = currentValue
+    }
+
+    val values = dataPoints.map { it.value }
+    return ChartData(
+        dataPoints = dataPoints,
+        dateRange = dateRange,
+        minValue = values.minOrNull() ?: 0.0,
+        maxValue = values.maxOrNull() ?: 0.0
+    )
+}
+
 fun calculateConsumptionForPeriod(
     meters: List<Meter>,
     dateRange: DateRange,
@@ -743,13 +1015,43 @@ fun calculateConsumptionForPeriod(
     }
 }
 
-// Получает предыдущий период той же длительности
 fun getPreviousDateRange(currentRange: DateRange): DateRange {
     val duration = ChronoUnit.DAYS.between(currentRange.start, currentRange.end)
     return DateRange(
         start = currentRange.start.minusDays(duration),
         end = currentRange.start.minusDays(1)
     )
+}
+
+fun parseMeterDate(dateString: String): LocalDateTime {
+    return try {
+        LocalDateTime.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    } catch (e: Exception) {
+        LocalDateTime.parse(dateString.substringBefore(" ") + " 00:00", DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    }
+}
+
+fun formatDateShort(dateString: String, dateRange: DateRange): String {
+    val formatter = when {
+        ChronoUnit.DAYS.between(dateRange.start, dateRange.end) <= 7 ->
+            DateTimeFormatter.ofPattern("dd.MM")
+        ChronoUnit.MONTHS.between(dateRange.start, dateRange.end) <= 3 ->
+            DateTimeFormatter.ofPattern("dd.MM")
+        else ->
+            DateTimeFormatter.ofPattern("MM.yy")
+    }
+
+    return try {
+        LocalDate.parse(dateString.substringBefore(" ")).format(formatter)
+    } catch (e: Exception) {
+        dateString.substringBefore(" ")
+    }
+}
+
+fun getPeriodLabel(period: Period, dateRange: DateRange): String {
+    val startStr = dateRange.start.format(DateTimeFormatter.ofPattern("dd.MM.yy"))
+    val endStr = dateRange.end.format(DateTimeFormatter.ofPattern("dd.MM.yy"))
+    return "$startStr - $endStr"
 }
 
 // Расширения для MeterType
