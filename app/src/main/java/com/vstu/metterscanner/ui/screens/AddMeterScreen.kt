@@ -1,12 +1,5 @@
 package com.vstu.metterscanner.ui.screens
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.ImageDecoder
-import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
-import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -31,8 +24,6 @@ import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
 import kotlinx.coroutines.launch
-import java.io.File
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,13 +122,14 @@ fun AddMeterScreen(
             ) {
                 // Карточка с информацией о последнем показании (ТОЛЬКО ДЛЯ СПРАВКИ)
                 if (lastMeter != null) {
-                    LastMeterCard(lastMeter!!)
+                    // ИСПРАВЛЕНО: используем простую карточку без фото
+                    LastMeterCardSimple(lastMeter!!)
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                // Превью фотографии, если она есть
+                // Превью фотографии, если она есть (только для текущего добавления)
                 capturedPhotoPath?.let { photoPath ->
-                    val bitmap = loadBitmapFromFile(context, photoPath)
+                    val bitmap = ImageUtils.loadBitmapFromFile(context, photoPath)
                     bitmap?.let {
                         Card(
                             modifier = Modifier
@@ -455,7 +447,7 @@ fun AddMeterScreen(
 }
 
 @Composable
-fun LastMeterCard(lastMeter: Meter) {
+fun LastMeterCardSimple(lastMeter: Meter) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -528,3 +520,4 @@ fun LastMeterCard(lastMeter: Meter) {
         }
     }
 }
+
