@@ -1,6 +1,5 @@
 package com.vstu.metterscanner.ui.screens
 
-import android.R.color.transparent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -20,7 +19,6 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -47,12 +45,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.vstu.metterscanner.MeterViewModel
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -69,10 +64,12 @@ fun CameraScanScreen(
     var isScanning by remember { mutableStateOf(false) }
     var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var scanResult by remember { mutableStateOf<String?>(null) }
+    var photoPath by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
-    // Анимация сканирования - вынесена за пределы Canvas
+    // Анимация сканирования
     val animatedProgress = remember { Animatable(0f) }
 
     LaunchedEffect(isScanning) {
@@ -115,6 +112,12 @@ fun CameraScanScreen(
         }
     }
 
+    // Функция для немедленного возврата результата
+    fun returnResult(value: String, path: String?) {
+        Log.d("CameraScanScreen", "Возвращаем результат: $value, путь: $path")
+        onResult(value, path)
+    }
+
     fun capturePhoto() {
         val imageCapture = imageCapture ?: return
 
@@ -134,34 +137,44 @@ fun CameraScanScreen(
                     coroutineScope.launch {
                         val uri = Uri.fromFile(photoFile)
                         capturedImageUri = uri
+                        photoPath = photoFile.absolutePath
 
-                        // ВАЖНО: Всегда обрезаем до области сканирования
-                        recognizeTextFromImage(context, uri, cropToScanArea = true) { text ->
-                            recognizedText = text
-                            val numbers = extractNumbersFromText(text)
+                        // Используем TextRecognitionHelper для распознавания
+                        val textResult = TextRecognitionHelper.recognizeTextFromUri(
+                            context,
+                            uri,
 
-                            // Строгая фильтрация: только числа из области сканирования
-                            val filteredNumbers = filterMeterReadings(numbers)
+                            cropToScanArea = true
+                        )
 
-                            if (filteredNumbers.isNotEmpty()) {
-                                // Берем наиболее вероятное показание (самое длинное)
-                                val selectedNumber = filteredNumbers.maxByOrNull { it.replace(".", "").length }
-                                manualInput = selectedNumber ?: ""
+                        recognizedText = textResult
+                        Log.d("CameraScanScreen", "Полный распознанный текст: $textResult")
 
-                                // ДОБАВЛЕНО: АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ПРИ ХОРОШЕМ РАСПОЗНАВАНИИ
-                                if (selectedNumber != null && selectedNumber.isNotBlank()) {
-                                    // Автоматически используем распознанное значение через 1 секунду
-                                    coroutineScope.launch {
-                                        kotlinx.coroutines.delay(1000)
-                                        onResult(selectedNumber, photoFile.absolutePath)
-                                    }
-                                }
-                            } else {
-                                manualInput = ""
-                                // Нет подходящих чисел - ждем ручного ввода
+                        val numbers = TextRecognitionHelper.extractNumbersFromText(textResult)
+                        Log.d("CameraScanScreen", "Извлечены числа: $numbers")
+
+                        val filteredNumbers = TextRecognitionHelper.filterMeterReadings(numbers)
+                        Log.d("CameraScanScreen", "Отфильтрованные числа: $filteredNumbers")
+
+                        if (filteredNumbers.isNotEmpty()) {
+                            // Берем наиболее вероятное показание (самое длинное)
+                            val selectedNumber = filteredNumbers.maxByOrNull { it.replace(".", "").length }
+                            manualInput = selectedNumber ?: ""
+                            scanResult = selectedNumber
+
+                            Log.d("CameraScanScreen", "Выбрано число: $selectedNumber")
+
+                            // Немедленно возвращаем результат
+                            if (selectedNumber != null && selectedNumber.isNotBlank()) {
+                                Log.d("CameraScanScreen", "Автоматически подтверждаем результат")
+                                returnResult(selectedNumber, photoFile.absolutePath)
                             }
-                            isScanning = false
+                        } else {
+                            manualInput = ""
+                            scanResult = null
+                            Log.d("CameraScanScreen", "Не найдено подходящих чисел")
                         }
+                        isScanning = false
                     }
                 }
 
@@ -207,25 +220,11 @@ fun CameraScanScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Кнопка подтверждения
-                if (recognizedText.isNotEmpty() || manualInput.isNotEmpty() || capturedImageUri != null) {
+                // Кнопка подтверждения (всегда видима если есть мануальный ввод)
+                if (manualInput.isNotEmpty()) {
                     FloatingActionButton(
                         onClick = {
-                            val result = if (manualInput.isNotEmpty()) {
-                                manualInput
-                            } else {
-                                val numbers = extractNumbersFromText(recognizedText)
-                                if (numbers.isNotEmpty()) {
-                                    val selectedNumber = numbers.maxByOrNull { it.replace(".", "").length }
-                                        ?: numbers.first()
-                                    removeLeadingZeros(selectedNumber)
-                                } else {
-                                    ""
-                                }
-                            }
-
-                            val photoPath = capturedImageUri?.path
-                            onResult(result, photoPath)
+                            returnResult(manualInput, photoPath)
                         }
                     ) {
                         Icon(Icons.Default.Check, contentDescription = "Использовать")
@@ -254,7 +253,7 @@ fun CameraScanScreen(
                         }
                     )
 
-                    // Overlay с рамкой сканирования - ПРАВИЛЬНАЯ ЛОГИКА!
+                    // Overlay с рамкой сканирования
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -443,39 +442,35 @@ fun CameraScanScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        if (recognizedText.isNotEmpty()) {
-                            val foundNumbers = extractNumbersFromText(recognizedText)
-                            val filteredNumbers = filterMeterReadings(foundNumbers)
+                        if (scanResult != null) {
+                            Text(
+                                text = "✓ Значение автоматически распознано: $scanResult",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Экран закроется автоматически через 2 секунды",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        } else if (recognizedText.isNotEmpty()) {
+                            val numbers = TextRecognitionHelper.extractNumbersFromText(recognizedText)
+                            val filteredNumbers = TextRecognitionHelper.filterMeterReadings(numbers)
 
                             if (filteredNumbers.isNotEmpty()) {
-                                // Убираем ведущие нули для отображения
                                 val cleanNumbers = filteredNumbers.distinct()
                                 Text(
-                                    text = "Найдены цифры в области сканирования: ${cleanNumbers.joinToString(", ")}",
+                                    text = "Найдены цифры: ${cleanNumbers.joinToString(", ")}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
 
-                                // Выбираем наиболее вероятное показание
-                                val selectedNumber = if (manualInput.isNotEmpty()) {
-                                    manualInput
-                                } else {
-                                    // Выбираем число с наибольшим количеством цифр
-                                    val longestNumber = cleanNumbers.maxByOrNull { it.replace(".", "").length }
-                                    longestNumber ?: cleanNumbers.first()
-                                }
-
-                                Text(
-                                    text = "Выбрано: $selectedNumber",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                )
-
                                 // Предлагаем выбрать другое число
                                 if (cleanNumbers.size > 1) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Выберите другое значение:",
+                                        text = "Выберите значение:",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -489,7 +484,10 @@ fun CameraScanScreen(
                                         cleanNumbers.forEach { number ->
                                             FilterChip(
                                                 selected = manualInput == number,
-                                                onClick = { manualInput = number },
+                                                onClick = {
+                                                    manualInput = number
+                                                    scanResult = number
+                                                },
                                                 label = { Text(number) }
                                             )
                                         }
@@ -497,7 +495,7 @@ fun CameraScanScreen(
                                 }
                             } else {
                                 Text(
-                                    text = "Значимые цифры не найдены. Убедитесь, что счетчик в области сканирования",
+                                    text = "Значимые цифры не найдены",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.error
                                 )
@@ -525,6 +523,7 @@ fun CameraScanScreen(
                                 // Разрешаем только цифры и одну точку
                                 if (newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
                                     manualInput = newValue
+                                    scanResult = newValue
                                 }
                             },
                             label = { Text("Введите показания") },
@@ -542,11 +541,16 @@ fun CameraScanScreen(
 
                         if (manualInput.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "✓ Значение сохранено",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Button(
+                                onClick = {
+                                    returnResult(manualInput, photoPath)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Использовать это значение")
+                            }
                         }
                     }
                 }
@@ -595,6 +599,14 @@ fun CameraScanScreen(
                     }
                 }
             }
+        }
+    }
+
+    // Автоматически закрываем экран через 2 секунды после успешного распознавания
+    LaunchedEffect(scanResult) {
+        if (scanResult != null && scanResult!!.isNotBlank()) {
+            kotlinx.coroutines.delay(2000)
+            returnResult(scanResult!!, photoPath)
         }
     }
 
@@ -767,200 +779,6 @@ fun PhotoPreviewScreen(
                 }
             }
         }
-    }
-}
-
-// Улучшенная функция для распознавания текста ТОЛЬКО из области сканирования
-private fun recognizeTextFromImage(
-    context: Context,
-    imageUri: Uri,
-    cropToScanArea: Boolean = true,
-    onResult: (String) -> Unit
-) {
-    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-
-    try {
-        // 1. Загружаем полное изображение
-        val fullBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val source = ImageDecoder.createSource(context.contentResolver, imageUri)
-            ImageDecoder.decodeBitmap(source)
-        } else {
-            MediaStore.Images.Media.getBitmap(context.contentResolver, imageUri)
-        }
-
-        if (fullBitmap == null) {
-            Log.e("TextRecognition", "Не удалось загрузить изображение")
-            onResult("")
-            return
-        }
-
-        // 2. Логирование для отладки
-        Log.d("TextRecognition", "Начало распознавания, cropToScanArea: $cropToScanArea")
-        Log.d("TextRecognition", "Размер изображения: ${fullBitmap.width}x${fullBitmap.height}")
-
-        if (!cropToScanArea) {
-            // Если не обрезаем - распознаем все изображение
-            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(fullBitmap, 0)
-            recognizer.process(image)
-                .addOnSuccessListener { visionText ->
-                    Log.d("TextRecognition", "РАСПОЗНАННЫЙ ТЕКСТ (полное изображение): ${visionText.text}")
-                    onResult(visionText.text)
-                }
-                .addOnFailureListener { e ->
-                    Log.e("TextRecognition", "Ошибка распознавания: ${e.message}", e)
-                    onResult("")
-                }
-            fullBitmap.recycle()
-            return
-        }
-
-        // 3. ТОЧНЫЕ параметры обрезки (должны совпадать с UI!)
-        val fullWidth = fullBitmap.width
-        val fullHeight = fullBitmap.height
-
-        // ТАКИЕ ЖЕ пропорции, как на экране:
-        // Область сканирования: 80% ширины, высота = 30% от этой ширины
-        val scanAreaWidth = (fullWidth * 0.8).toInt()
-        val scanAreaHeight = (scanAreaWidth * 0.3).toInt() // 0.3 = 30%
-
-        // Центрируем область
-        val left = (fullWidth - scanAreaWidth) / 2
-        val top = (fullHeight - scanAreaHeight) / 2
-
-        // 4. Проверяем границы
-        if (left < 0 || top < 0 ||
-            left + scanAreaWidth > fullWidth ||
-            top + scanAreaHeight > fullHeight) {
-            Log.e("TextRecognition", "Область сканирования выходит за границы изображения")
-            Log.e("TextRecognition", "left=$left, top=$top, width=$scanAreaWidth, height=$scanAreaHeight")
-            onResult("")
-            fullBitmap.recycle()
-            return
-        }
-
-        Log.d("TextRecognition", "Область сканирования: $left,$top ${scanAreaWidth}x$scanAreaHeight")
-
-        // 5. ВАЖНО: Обрезаем ТОЛЬКО область сканирования
-        val croppedBitmap = Bitmap.createBitmap(
-            fullBitmap,
-            left,
-            top,
-            scanAreaWidth,
-            scanAreaHeight
-        )
-
-        // 6. Сохраняем для отладки (опционально)
-        saveDebugImage(context, croppedBitmap, "scan_area_${System.currentTimeMillis()}.jpg")
-
-        // 7. Распознаем ТОЛЬКО из обрезанной области
-        val image = com.google.mlkit.vision.common.InputImage.fromBitmap(croppedBitmap, 0)
-
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                val resultText = visionText.text
-                Log.d("TextRecognition", "РАСПОЗНАННЫЙ ТЕКСТ ИЗ ОБЛАСТИ СКАНИРОВАНИЯ: $resultText")
-
-                // Логируем все блоки текста для отладки
-                for (block in visionText.textBlocks) {
-                    Log.d("TextRecognition", "Блок текста: ${block.text}")
-                    Log.d("TextRecognition", "Координаты блока: ${block.boundingBox}")
-                }
-
-                onResult(resultText)
-            }
-            .addOnFailureListener { e ->
-                Log.e("TextRecognition", "Ошибка распознавания: ${e.message}", e)
-                onResult("")
-            }
-
-        // 8. Освобождаем ресурсы
-        croppedBitmap.recycle()
-        fullBitmap.recycle()
-
-    } catch (e: Exception) {
-        Log.e("TextRecognition", "Ошибка обработки изображения: ${e.message}", e)
-        onResult("")
-    }
-}
-
-// Функция для сохранения debug изображения
-private fun saveDebugImage(context: Context, bitmap: Bitmap, fileName: String) {
-    try {
-        val debugDir = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "debug")
-        if (!debugDir.exists()) {
-            debugDir.mkdirs()
-        }
-
-        val file = File(debugDir, fileName)
-        val stream = FileOutputStream(file)
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-        stream.flush()
-        stream.close()
-        Log.d("Debug", "Сохранено debug изображение: ${file.absolutePath}")
-    } catch (e: Exception) {
-        Log.e("Debug", "Ошибка сохранения debug изображения", e)
-    }
-}
-
-// Улучшенная функция для извлечения чисел из текста
-private fun extractNumbersFromText(text: String): List<String> {
-    if (text.isBlank()) return emptyList()
-
-    // Ищем числа в форматах: 1234, 1234.56, 1,234.56
-    val patterns = listOf(
-        """\b\d{3,9}\b""",                     // 1234567 (3-9 цифр)
-        """\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b""", // 1,234.56
-        """\b\d+\.\d{1,3}\b""",                 // 1234.56
-        """\b\d{3,9}[\.,]\d{1,3}\b"""           // 1234,56 или 1234.56
-    )
-
-    val results = mutableListOf<String>()
-
-    patterns.forEach { pattern ->
-        val regex = pattern.toRegex()
-        val matches = regex.findAll(text)
-        matches.forEach { match ->
-            val number = match.value.replace(',', '.')
-            // Проверяем, что это действительно число
-            if (number.replace(".", "").toDoubleOrNull() != null) {
-                results.add(removeLeadingZeros(number))
-            }
-        }
-    }
-
-    return results.distinct()
-}
-
-// Функция для фильтрации показаний счетчика
-private fun filterMeterReadings(numbers: List<String>): List<String> {
-    return numbers.filter { number ->
-        val cleanNumber = removeLeadingZeros(number)
-        val digitCount = cleanNumber.replace(".", "").length
-
-        // УВЕЛИЧЕННЫЙ ДИАПАЗОН: счетчики могут иметь от 3 до 9 цифр
-        digitCount in 3..9 && cleanNumber.replace(".", "").toDoubleOrNull() != null
-    }.distinct()
-}
-
-// Функция для удаления ведущих нулей
-private fun removeLeadingZeros(number: String): String {
-    if (number.isBlank()) return ""
-
-    // Разделяем на целую и дробную части
-    val parts = number.split('.')
-    var integerPart = parts[0]
-
-    // Убираем ведущие нули из целой части, но оставляем один ноль если все цифры нули
-    integerPart = integerPart.replaceFirst("^0+".toRegex(), "")
-    if (integerPart.isEmpty()) {
-        integerPart = "0"
-    }
-
-    // Возвращаем число с дробной частью если она была
-    return if (parts.size > 1) {
-        "$integerPart.${parts[1]}"
-    } else {
-        integerPart
     }
 }
 
