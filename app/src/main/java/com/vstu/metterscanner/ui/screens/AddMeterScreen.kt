@@ -24,6 +24,9 @@ import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
 import kotlinx.coroutines.launch
+import java.io.File
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,6 +53,38 @@ fun AddMeterScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
+    // Функция для копирования файла в постоянное хранилище
+    suspend fun copyToPermanentStorage(tempPath: String): String {
+        return withContext(Dispatchers.IO) {
+            val tempFile = File(tempPath)
+            if (!tempFile.exists()) {
+                return@withContext tempPath
+            }
+
+            // Если это уже постоянный файл (не временный), возвращаем как есть
+            if (!tempPath.contains("temp_image") && !tempPath.contains("temp_")) {
+                return@withContext tempPath
+            }
+
+            val permanentDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+            val permanentFile = File(
+                permanentDir,
+                "meter_photo_${System.currentTimeMillis()}.jpg"
+            )
+
+            tempFile.copyTo(permanentFile, overwrite = true)
+
+            // Удаляем временный файл после копирования
+            try {
+                tempFile.delete()
+            } catch (e: Exception) {
+                // Игнорируем ошибку удаления
+            }
+
+            return@withContext permanentFile.absolutePath
+        }
+    }
+
     // Получаем последнее показание при изменении типа только для отображения в карточке
     LaunchedEffect(selectedType) {
         lastMeter = viewModel.getLastMeter(selectedType)
@@ -58,17 +93,28 @@ fun AddMeterScreen(
     if (showCamera) {
         CameraScanScreen(
             onResult = { scannedValue, photoPath ->
-                // АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПОЛЯ ПРИ ПОЛУЧЕНИИ РЕЗУЛЬТАТА
-                value = scannedValue
-                capturedPhotoPath = photoPath
-                showCamera = false
-
-                // Показать уведомление, что значение обновлено
+                // Обрабатываем результат сканирования
                 coroutineScope.launch {
-                    snackbarHostState.showSnackbar(
-                        message = "Значение распознано и установлено: $scannedValue",
-                        duration = SnackbarDuration.Short
-                    )
+                    var permanentPath: String? = null
+
+                    if (photoPath != null) {
+                        permanentPath = copyToPermanentStorage(photoPath)
+                    }
+
+                    // Обновляем UI в основном потоке
+                    withContext(Dispatchers.Main) {
+                        value = scannedValue
+                        capturedPhotoPath = permanentPath
+                        showCamera = false
+
+                        // Показываем уведомление
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(
+                                message = "Значение распознано и установлено: $scannedValue",
+                                duration = SnackbarDuration.Short
+                            )
+                        }
+                    }
                 }
             },
             onCancel = {
@@ -120,9 +166,8 @@ fun AddMeterScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Карточка с информацией о последнем показании (ТОЛЬКО ДЛЯ СПРАВКИ)
+                // Карточка с информацией о последнем показании
                 if (lastMeter != null) {
-                    // ИСПРАВЛЕНО: используем простую карточку без фото
                     LastMeterCardSimple(lastMeter!!)
                     Spacer(modifier = Modifier.height(16.dp))
                 }
@@ -520,4 +565,3 @@ fun LastMeterCardSimple(lastMeter: Meter) {
         }
     }
 }
-
