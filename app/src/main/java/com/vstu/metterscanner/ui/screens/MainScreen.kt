@@ -40,7 +40,7 @@ fun MainScreen(
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // ТОЛЬКО последние 10 показаний
+
     val recentMeters = remember(meters) {
         meters.sortedByDescending { it.date }.take(10)
     }
@@ -104,7 +104,6 @@ fun MainScreen(
                         }
                     },
                     actions = {
-                        // Кнопка быстрого перехода в историю
                         IconButton(
                             onClick = { navController.navigate(Routes.HISTORY_SCREEN) }
                         ) {
@@ -119,6 +118,7 @@ fun MainScreen(
                     containerColor = MaterialTheme.colorScheme.primary
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Добавить", tint = Color.White)
+
                 }
             },
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
@@ -144,7 +144,7 @@ fun MainScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    // Список последних показаний
+
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
