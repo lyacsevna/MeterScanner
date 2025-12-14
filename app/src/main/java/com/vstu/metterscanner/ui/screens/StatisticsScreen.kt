@@ -57,9 +57,7 @@ fun StatisticsScreen(
                     }
                 },
                 actions = {
-                    // Быстрый фильтр по типу (иконки)
                     Row {
-                        // Кнопка "Все"
                         IconButton(
                             onClick = { selectedType = null },
                             modifier = Modifier.size(24.dp)
@@ -98,7 +96,6 @@ fun StatisticsScreen(
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
         ) {
-            // 1. Период и фильтры
             PeriodFilterSection(
                 selectedPeriod = selectedPeriod,
                 onPeriodChange = { period ->
@@ -107,20 +104,16 @@ fun StatisticsScreen(
                 }
             )
 
-            // 2. KPI карточки
             KpiCards(statisticsData.kpi, selectedType)
 
-            // 3. Основной график
             ConsumptionChart(
                 meters = if (selectedType != null) meters.filter { it.type == selectedType } else meters,
                 period = selectedPeriod,
                 selectedType = selectedType
             )
 
-            // 4. Детальная статистика
             StatisticsDetails(statisticsData, selectedType)
 
-            // 5. Последние показания
             RecentReadings(
                 meters = if (selectedType != null) meters.filter { it.type == selectedType }.take(5)
                 else meters.take(5)
@@ -184,8 +177,8 @@ fun KpiCards(kpi: KpiData, selectedType: MeterType?) {
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         KpiCard(
-            title = "Всего",
-            value = String.format("%.1f", kpi.totalConsumption),
+            title = "Расход",
+            value = String.format("%.1f", kpi.consumption),
             unit = kpi.unit ?: "ед.",
             icon = Icons.Default.ShowChart,
             color = MaterialTheme.colorScheme.primary
@@ -200,8 +193,8 @@ fun KpiCards(kpi: KpiData, selectedType: MeterType?) {
         )
 
         KpiCard(
-            title = "Макс",
-            value = String.format("%.1f", kpi.maxConsumption),
+            title = "Экономия",
+            value = String.format("%.1f", kpi.savings),
             unit = kpi.unit ?: "ед.",
             icon = Icons.Default.Star,
             color = MaterialTheme.colorScheme.tertiary
@@ -218,7 +211,6 @@ fun KpiCard(
     color: Color
 ) {
     Card(
-
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
@@ -284,7 +276,7 @@ fun ConsumptionChart(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Динамика потребления",
+                    text = "Динамика показаний",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -310,8 +302,9 @@ fun ConsumptionChart(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (meters.size >= 2) {
-                SimpleChart(meters, selectedType ?: MeterType.ELECTRICITY)
+            val filteredMeters = if (selectedType != null) meters.filter { it.type == selectedType } else meters
+            if (filteredMeters.size >= 2) {
+                ReadingsChart(filteredMeters, selectedType ?: MeterType.ELECTRICITY)
             } else {
                 Box(
                     modifier = Modifier
@@ -320,7 +313,7 @@ fun ConsumptionChart(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Недостаточно данных",
+                        text = "Недостаточно данных для графика",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -330,9 +323,18 @@ fun ConsumptionChart(
 }
 
 @Composable
-fun SimpleChart(meters: List<Meter>, type: MeterType) {
+fun ReadingsChart(meters: List<Meter>, type: MeterType) {
     val sorted = meters.sortedBy { it.date }
-    val values = sorted.map { it.value }
+
+    // Вычисляем разницы между последовательными показаниями
+    val differences = if (sorted.size >= 2) {
+        sorted.windowed(2) { pair ->
+            val (prev, curr) = pair
+            curr.value - prev.value
+        }
+    } else {
+        emptyList()
+    }
 
     Box(
         modifier = Modifier
@@ -345,18 +347,18 @@ fun SimpleChart(meters: List<Meter>, type: MeterType) {
             .padding(12.dp)
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            if (values.size < 2) return@Canvas
+            if (differences.isEmpty()) return@Canvas
 
             val padding = 40f
             val chartWidth = size.width - padding * 2
             val chartHeight = size.height - padding * 2
 
-            val maxVal = values.maxOrNull() ?: 1.0
-            val minVal = values.minOrNull() ?: 0.0
+            val maxVal = differences.maxOrNull() ?: 1.0
+            val minVal = differences.minOrNull() ?: 0.0
             val range = (maxVal - minVal).coerceAtLeast(1.0)
 
-            val points = values.mapIndexed { index, value ->
-                val x = padding + (chartWidth * index / (values.size - 1))
+            val points = differences.mapIndexed { index, value ->
+                val x = padding + (chartWidth * index / (differences.size - 1))
                 val y = size.height - padding - (chartHeight * (value - minVal) / range).toFloat()
                 Offset(x.toFloat(), y)
             }
@@ -381,6 +383,22 @@ fun SimpleChart(meters: List<Meter>, type: MeterType) {
                     radius = 4f
                 )
             }
+
+            // Ось X (время)
+            drawLine(
+                color = Color.Gray,
+                start = Offset(padding, size.height - padding),
+                end = Offset(size.width - padding, size.height - padding),
+                strokeWidth = 1f
+            )
+
+            // Ось Y (значения)
+            drawLine(
+                color = Color.Gray,
+                start = Offset(padding, padding),
+                end = Offset(padding, size.height - padding),
+                strokeWidth = 1f
+            )
         }
     }
 }
@@ -404,7 +422,7 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Сравнение
+            // Сравнение с предыдущим периодом
             ComparisonItem(
                 current = data.comparison.currentConsumption,
                 previous = data.comparison.previousConsumption,
@@ -416,7 +434,7 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
             // Распределение (если не выбран тип)
             if (selectedType == null && data.distribution.isNotEmpty()) {
                 Text(
-                    text = "Распределение по типам",
+                    text = "Расход по типам",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium
                 )
@@ -424,7 +442,7 @@ fun StatisticsDetails(data: StatisticsData, selectedType: MeterType?) {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 data.distribution.forEach { (type, value) ->
-                    DistributionRow(type, value, data.kpi.totalConsumption)
+                    DistributionRow(type, value, data.kpi.consumption)
                 }
             }
         }
@@ -597,24 +615,24 @@ data class StatisticsData(
 )
 
 data class KpiData(
-    val totalConsumption: Double,
-    val averagePerDay: Double,
-    val maxConsumption: Double,
-    val unit: String?
+    val consumption: Double,           // Общий расход за период
+    val averagePerDay: Double,         // Средний расход в день
+    val savings: Double,               // Экономия/перерасход по сравнению с предыдущим периодом
+    val unit: String?                  // Единица измерения
 )
 
 data class ComparisonData(
-    val currentConsumption: Double,
-    val previousConsumption: Double,
-    val changePercentage: Double
+    val currentConsumption: Double,    // Расход в текущем периоде
+    val previousConsumption: Double,   // Расход в предыдущем периоде
+    val changePercentage: Double       // Процент изменения
 )
 
 // Вспомогательные функции
 fun getDefaultDateRange(period: Period): DateRange {
     val today = LocalDate.now()
     return when (period) {
-        Period.DAILY -> DateRange(today, today)
-        Period.WEEKLY -> DateRange(today.minusDays(7), today)
+        Period.DAILY -> DateRange(today.minusDays(1), today)
+        Period.WEEKLY -> DateRange(today.minusWeeks(1), today)
         Period.MONTHLY -> DateRange(today.minusMonths(1), today)
         Period.YEARLY -> DateRange(today.minusYears(1), today)
     }
@@ -625,7 +643,14 @@ fun calculateStatistics(
     dateRange: DateRange,
     selectedType: MeterType?
 ): StatisticsData {
-    val filtered = selectedType?.let { meters.filter { it.type == selectedType } } ?: meters
+    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    // Фильтруем по дате и типу
+    val filtered = meters.filter { meter ->
+        val meterDate = LocalDate.parse(meter.date.substringBefore(" "), DateTimeFormatter.ISO_LOCAL_DATE)
+        (meterDate.isAfter(dateRange.start.minusDays(1)) && meterDate.isBefore(dateRange.end.plusDays(1))) &&
+                (selectedType == null || meter.type == selectedType)
+    }
 
     if (filtered.isEmpty()) {
         return StatisticsData(
@@ -635,28 +660,95 @@ fun calculateStatistics(
         )
     }
 
-    // Расчет потребления
-    val consumptions = filtered.groupBy { it.type }.mapValues { (_, typeMeters) ->
-        val sorted = typeMeters.sortedBy { it.date }
-        if (sorted.size >= 2) sorted.last().value - sorted.first().value else 0.0
+    // Группируем по типу и вычисляем расход для каждого типа
+    val consumptionByType = mutableMapOf<MeterType, Double>()
+    val distribution = mutableMapOf<MeterType, Double>()
+
+    val types = if (selectedType != null) listOf(selectedType) else MeterType.values().toList()
+
+    types.forEach { type ->
+        val typeMeters = filtered.filter { it.type == type }.sortedBy { it.date }
+
+        if (typeMeters.size >= 2) {
+            // Вычисляем разницу между первым и последним показанием за период
+            val firstReading = typeMeters.first()
+            val lastReading = typeMeters.last()
+            val consumption = lastReading.value - firstReading.value
+
+            consumptionByType[type] = max(0.0, consumption)
+            distribution[type] = consumption
+        } else {
+            consumptionByType[type] = 0.0
+            distribution[type] = 0.0
+        }
     }
 
-    val total = consumptions.values.sum()
+    // Общий расход
+    val totalConsumption = consumptionByType.values.sum()
+
+    // Длительность периода в днях
     val days = ChronoUnit.DAYS.between(dateRange.start, dateRange.end).coerceAtLeast(1).toDouble()
+
+    // Вычисляем предыдущий период для сравнения
+    val previousDateRange = getPreviousDateRange(dateRange)
+    val previousConsumption = calculateConsumptionForPeriod(meters, previousDateRange, selectedType)
+
+    val savings = previousConsumption - totalConsumption
 
     return StatisticsData(
         kpi = KpiData(
-            totalConsumption = total,
-            averagePerDay = total / days,
-            maxConsumption = consumptions.values.maxOrNull() ?: 0.0,
+            consumption = totalConsumption,
+            averagePerDay = totalConsumption / days,
+            savings = savings,
             unit = selectedType?.getUnit()
         ),
         comparison = ComparisonData(
-            currentConsumption = total,
-            previousConsumption = total * 0.8, // Для примера
-            changePercentage = if (total > 0) 20.0 else 0.0
+            currentConsumption = totalConsumption,
+            previousConsumption = previousConsumption,
+            changePercentage = if (previousConsumption > 0)
+                ((totalConsumption - previousConsumption) / previousConsumption * 100)
+            else 0.0
         ),
-        distribution = consumptions
+        distribution = distribution.filter { it.value > 0 }
+    )
+}
+
+// Вычисляет расход для заданного периода
+fun calculateConsumptionForPeriod(
+    meters: List<Meter>,
+    dateRange: DateRange,
+    selectedType: MeterType?
+): Double {
+    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    val filtered = meters.filter { meter ->
+        val meterDate = LocalDate.parse(meter.date.substringBefore(" "), DateTimeFormatter.ISO_LOCAL_DATE)
+        (meterDate.isAfter(dateRange.start.minusDays(1)) && meterDate.isBefore(dateRange.end.plusDays(1))) &&
+                (selectedType == null || meter.type == selectedType)
+    }
+
+    if (filtered.isEmpty()) return 0.0
+
+    val types = if (selectedType != null) listOf(selectedType) else MeterType.values().toList()
+
+    return types.sumOf { type ->
+        val typeMeters = filtered.filter { it.type == type }.sortedBy { it.date }
+        if (typeMeters.size >= 2) {
+            val firstReading = typeMeters.first()
+            val lastReading = typeMeters.last()
+            max(0.0, lastReading.value - firstReading.value)
+        } else {
+            0.0
+        }
+    }
+}
+
+// Получает предыдущий период той же длительности
+fun getPreviousDateRange(currentRange: DateRange): DateRange {
+    val duration = ChronoUnit.DAYS.between(currentRange.start, currentRange.end)
+    return DateRange(
+        start = currentRange.start.minusDays(duration),
+        end = currentRange.start.minusDays(1)
     )
 }
 

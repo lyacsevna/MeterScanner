@@ -1,5 +1,8 @@
 package com.vstu.metterscanner.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -19,6 +23,7 @@ fun HelpScreen(
     navController: NavController
 ) {
     var expandedItem by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -146,22 +151,37 @@ fun HelpScreen(
                         ContactItem(
                             icon = Icons.Default.Email,
                             title = "Электронная почта",
-                            subtitle = "support@metterscanner.ru",
-                            onClick = { /* TODO */ }
+                            subtitle = "support@meterscanner.ru",
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                    data = Uri.parse("mailto:support@meterscanner.ru")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Обращение в поддержку MeterScanner")
+                                    putExtra(Intent.EXTRA_TEXT, "Здравствуйте!\n\n")
+                                }
+                                try {
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+
+                                    Toast.makeText(context, "Не удалось открыть почтовое приложение", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         )
 
                         ContactItem(
                             icon = Icons.Default.Phone,
                             title = "Телефон",
-                            subtitle = "+7 (XXX) XXX-XX-XX",
-                            onClick = { /* TODO */ }
-                        )
+                            subtitle = "+7 (900) 200-30-30",
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_DIAL).apply {
+                                    data = Uri.parse("tel:+79002003030")
+                                }
+                                try {
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
 
-                        ContactItem(
-                            icon = Icons.Default.Forum,
-                            title = "Чат поддержки",
-                            subtitle = "Онлайн консультация",
-                            onClick = { /* TODO */ }
+                                    Toast.makeText(context, "Не удалось открыть телефон", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         )
                     }
                 }
@@ -170,7 +190,7 @@ fun HelpScreen(
             // Инструкции
             item {
                 Text(
-                    text = "Инструкции",
+                    text = "Инструкции (в разработке)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
