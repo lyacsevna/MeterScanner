@@ -3,6 +3,8 @@
 package com.vstu.metterscanner.ui.screens
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -40,17 +42,22 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
-import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.activity.compose.BackHandler
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,7 +65,7 @@ fun HistoryScreen(
     viewModel: MeterViewModel,
     navController: NavController
 ) {
-    val meters by viewModel.allMeters.collectAsState()
+    val meters by viewModel.allMeters.collectAsStateWithLifecycle()
 
     // Фильтрация
     var selectedPeriod by remember { mutableStateOf(PeriodFilter.ALL) }
@@ -80,6 +87,25 @@ fun HistoryScreen(
 
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Сброс всех диалогов при уходе с экрана
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                showMeterMenuDialog = false
+                showDeleteDialog = false
+                showEditDialog = false
+                selectedMeter = null
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     // Фильтрация по периоду
     val filteredByPeriod = remember(meters, selectedPeriod) {
@@ -171,6 +197,10 @@ fun HistoryScreen(
 
     // Диалог меню для показаний
     if (showMeterMenuDialog && selectedMeter != null) {
+        BackHandler {
+            showMeterMenuDialog = false
+            selectedMeter = null
+        }
         MeterMenuDialog(
             meter = selectedMeter!!,
             onDismiss = {
@@ -191,6 +221,10 @@ fun HistoryScreen(
 
     // Диалог удаления
     if (showDeleteDialog && selectedMeter != null) {
+        BackHandler {
+            showDeleteDialog = false
+            selectedMeter = null
+        }
         DeleteMeterDialog(
             meter = selectedMeter!!,
             onDismiss = {
@@ -199,9 +233,14 @@ fun HistoryScreen(
             },
             onConfirm = {
                 coroutineScope.launch {
-                    viewModel.deleteMeter(selectedMeter!!)
-                    snackbarHostState.showSnackbar("Показание удалено")
-
+                    try {
+                        viewModel.deleteMeter(selectedMeter!!)
+                        snackbarHostState.showSnackbar("Показание удалено")
+                        showDeleteDialog = false
+                        selectedMeter = null
+                    } catch (e: Exception) {
+                        snackbarHostState.showSnackbar("Ошибка при удалении")
+                    }
                 }
             }
         )
@@ -209,6 +248,10 @@ fun HistoryScreen(
 
     // Диалог редактирования
     if (showEditDialog && selectedMeter != null) {
+        BackHandler {
+            showEditDialog = false
+            selectedMeter = null
+        }
         EditMeterDialog(
             meter = selectedMeter!!,
             viewModel = viewModel,
@@ -563,7 +606,6 @@ fun DeleteMeterDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    // ВЫПОЛНЯЕМ ПОДТВЕРЖДЕНИЕ И ЗАКРЫВАЕМ ДИАЛОГ
                     onConfirm()
                 },
                 colors = ButtonDefaults.textButtonColors(
@@ -593,7 +635,6 @@ fun EditMeterDialog(
     var value by remember { mutableStateOf(meter.value.toString()) }
     var note by remember { mutableStateOf(meter.note) }
     var capturedPhotoPath by remember { mutableStateOf(meter.photoPath) }
-    var showImagePicker by remember { mutableStateOf(false) }
     var showCropScreen by remember { mutableStateOf(false) }
     var imageToCropUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -608,8 +649,11 @@ fun EditMeterDialog(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            imageToCropUri = uri
-            showCropScreen = true
+            val copiedPath = copyImageToAppStorage(context, uri)
+            if (copiedPath != null) {
+                imageToCropUri = Uri.fromFile(File(copiedPath))
+                showCropScreen = true
+            }
         }
     }
 
@@ -678,7 +722,7 @@ fun EditMeterDialog(
                     value = value,
                     onValueChange = { if (it.matches(Regex("^\\d*\\.?\\d*$"))) value = it },
                     label = { Text("Значение (${getUnitForType(meter.type)})") },
-                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                     isError = value.isNotBlank() && !isValid,
                     leadingIcon = {
@@ -889,10 +933,13 @@ fun EditMeterDialog(
                                 photoPath = capturedPhotoPath
                             )
                             coroutineScope.launch {
-                                viewModel.updateMeter(updatedMeter)
-                                snackbarHostState.showSnackbar("Показание обновлено")
-                                // НЕМЕДЛЕННОЕ ЗАКРЫТИЕ
-                                onDismiss()
+                                try {
+                                    viewModel.updateMeter(updatedMeter)
+                                    snackbarHostState.showSnackbar("Показание обновлено")
+                                    onDismiss()
+                                } catch (e: Exception) {
+                                    snackbarHostState.showSnackbar("Ошибка при обновлении: ${e.message}")
+                                }
                             }
                         }
                     },
@@ -1210,11 +1257,11 @@ fun ImageCropScreen(
     }
 }
 
-// Вспомогательная функция для загрузки Bitmap из Uri
-fun loadBitmapFromUri(context: Context, uri: Uri): android.graphics.Bitmap? {
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
     return try {
         context.contentResolver.openInputStream(uri)?.use { stream ->
-            android.graphics.BitmapFactory.decodeStream(stream)
+            BitmapFactory.decodeStream(stream)
         }
     } catch (e: Exception) {
         e.printStackTrace()
@@ -1222,15 +1269,14 @@ fun loadBitmapFromUri(context: Context, uri: Uri): android.graphics.Bitmap? {
     }
 }
 
-// Вспомогательная функция для сохранения обрезанного Bitmap
-fun saveCroppedBitmap(context: Context, bitmap: android.graphics.Bitmap): String {
+fun saveCroppedBitmap(context: Context, bitmap: Bitmap): String {
     val timeStamp = System.currentTimeMillis()
     val fileName = "meter_cropped_${timeStamp}.jpg"
     val file = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), fileName)
 
     try {
         FileOutputStream(file).use { out ->
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
             out.flush()
         }
     } catch (e: Exception) {
@@ -1239,6 +1285,7 @@ fun saveCroppedBitmap(context: Context, bitmap: android.graphics.Bitmap): String
 
     return file.absolutePath
 }
+
 
 // Компоненты ниже остаются без изменений
 @Composable
@@ -1815,7 +1862,7 @@ fun EmptyHistoryView(
     }
 }
 
-// ИСПРАВЛЕННАЯ функция фильтрации по периоду
+
 fun filterMetersByPeriod(meters: List<Meter>, period: PeriodFilter): List<Meter> {
     val now = LocalDate.now()
 
@@ -1835,6 +1882,25 @@ fun filterMetersByPeriod(meters: List<Meter>, period: PeriodFilter): List<Meter>
         } catch (e: Exception) {
             false
         }
+    }
+}
+
+fun copyImageToAppStorage(context: Context, uri: Uri): String? {
+    return try {
+        val timeStamp = System.currentTimeMillis()
+        val fileName = "meter_edit_${timeStamp}.jpg"
+        val file = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), fileName)
+
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(file).use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        file.absolutePath
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
 }
 
@@ -1860,3 +1926,4 @@ enum class GroupingMode(val title: String) {
     BY_DATE("По дате"),
     BY_TYPE("По типу")
 }
+

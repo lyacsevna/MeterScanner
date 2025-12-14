@@ -24,5 +24,5 @@ data class MeterEntity(
     val note: String = "",
 
     @ColumnInfo(name = "photo_path")
-    val photoPath: String? = null  // Добавляем поле для фото
+    val photoPath: String? = null
 )
