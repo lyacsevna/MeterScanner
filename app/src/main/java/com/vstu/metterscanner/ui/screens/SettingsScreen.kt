@@ -83,7 +83,7 @@ fun SettingsScreen(
                             subtitle = "Использовать темную тему",
                             trailing = {
                                 Switch(
-                                    checked = darkModeEnabled,
+                                    checked = true,
                                     onCheckedChange = { darkModeEnabled = it }
                                 )
                             }

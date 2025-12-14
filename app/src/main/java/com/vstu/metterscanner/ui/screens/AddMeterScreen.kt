@@ -70,9 +70,6 @@ fun AddMeterScreen(
                 value = scannedValue
                 capturedPhotoPath = photoPath
                 showCamera = false
-                if (photoPath != null) {
-                    showPhotoPreview = true
-                }
 
                 // Показать уведомление, что значение обновлено
                 coroutineScope.launch {

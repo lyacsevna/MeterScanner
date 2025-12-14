@@ -109,7 +109,14 @@ dependencies {
     implementation("com.patrykandpatrick.vico:compose:1.16.0")
     implementation("com.patrykandpatrick.vico:compose-m3:1.16.0")
 
-
+// ML Kit Text Recognition
+    implementation("com.google.mlkit:text-recognition:16.0.0")
+// Для await() функции
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+// Для LiveData и ViewModel
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
 }
 
 kapt {

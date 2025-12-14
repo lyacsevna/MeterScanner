@@ -26,7 +26,6 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "meter_database"
                 )
-                    .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
                 instance

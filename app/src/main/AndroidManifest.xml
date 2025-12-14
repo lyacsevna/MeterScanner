@@ -10,11 +10,14 @@
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
     <!-- Для Android 10 и выше (Scoped Storage) -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
-    <!-- Для Android 13 и выше -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -28,7 +31,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MetterScanner"
+        android:enableOnBackInvokedCallback="true"
         tools:targetApi="31">
+
 
         <!-- Provider для работы с файлами -->
         <provider

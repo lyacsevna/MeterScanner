@@ -10,7 +10,7 @@ data class Meter(
     val value: Double,
     val date: String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")),
     val note: String = "",
-    val photoPath: String? = null  // Добавляем поле для пути к фото
+    val photoPath: String? = null
 ) {
     fun toEntity(): MeterEntity {
         return MeterEntity(
@@ -18,8 +18,8 @@ data class Meter(
             type = type,
             value = value,
             date = date,
-            note = note
-            // photoPath нужно добавить и в MeterEntity
+            note = note,
+            photoPath = photoPath
         )
     }
 
@@ -30,7 +30,8 @@ data class Meter(
                 type = entity.type,
                 value = entity.value,
                 date = entity.date,
-                note = entity.note
+                note = entity.note,
+                photoPath = entity.photoPath
             )
         }
     }

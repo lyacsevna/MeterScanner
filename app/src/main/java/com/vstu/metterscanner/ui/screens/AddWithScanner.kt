@@ -1,13 +1,13 @@
 package com.vstu.metterscanner.ui.screens
 
-import android.R.color.transparent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.ImageDecoder
+import android.graphics.BitmapFactory
+
 import android.net.Uri
 import android.os.Build
-import android.provider.MediaStore
+
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,7 +20,6 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +38,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -47,8 +47,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.vstu.metterscanner.MeterViewModel
 import kotlinx.coroutines.launch
 import java.io.File
@@ -69,11 +67,71 @@ fun CameraScanScreen(
     var isScanning by remember { mutableStateOf(false) }
     var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var scanResult by remember { mutableStateOf<String?>(null) }
+    var photoPath by remember { mutableStateOf<String?>(null) }
+    var showGallerySelection by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
-    // Анимация сканирования - вынесена за пределы Canvas
+    // Анимация сканирования
     val animatedProgress = remember { Animatable(0f) }
+
+    // Лаунчер для выбора изображения из галереи
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { uri ->
+            uri?.let { imageUri ->
+                coroutineScope.launch {
+                    isScanning = true
+                    showGallerySelection = false
+
+                    try {
+                        // Копируем изображение из галереи во временный файл
+                        val tempFile = createTempImageFile(context)
+                        copyUriToFile(context, imageUri, tempFile)
+                        val tempUri = Uri.fromFile(tempFile)
+
+                        capturedImageUri = tempUri
+                        photoPath = tempFile.absolutePath
+
+                        // Распознаем текст с изображения
+                        val textResult = TextRecognitionHelper.recognizeTextFromUri(
+                            context,
+                            tempUri,
+                            cropToScanArea = false  // Для фото из галереи не обрезаем
+                        )
+
+                        recognizedText = textResult
+                        Log.d("CameraScanScreen", "Полный распознанный текст: $textResult")
+
+                        val numbers = TextRecognitionHelper.extractNumbersFromText(textResult)
+                        Log.d("CameraScanScreen", "Извлечены числа: $numbers")
+
+                        val filteredNumbers = TextRecognitionHelper.filterMeterReadings(numbers)
+                        Log.d("CameraScanScreen", "Отфильтрованные числа: $filteredNumbers")
+
+                        if (filteredNumbers.isNotEmpty()) {
+                            // Берем наиболее вероятное показание (самое длинное)
+                            val selectedNumber = filteredNumbers.maxByOrNull { it.replace(".", "").length }
+                            manualInput = selectedNumber ?: ""
+                            scanResult = selectedNumber
+
+                            Log.d("CameraScanScreen", "Выбрано число: $selectedNumber")
+                        } else {
+                            manualInput = ""
+                            scanResult = null
+                            Log.d("CameraScanScreen", "Не найдено подходящих чисел")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("CameraScanScreen", "Ошибка при обработке фото из галереи: ${e.message}", e)
+                        scanResult = null
+                    } finally {
+                        isScanning = false
+                    }
+                }
+            }
+        }
+    )
 
     LaunchedEffect(isScanning) {
         if (isScanning) {
@@ -109,10 +167,37 @@ fun CameraScanScreen(
         )
     }
 
+    // Проверяем разрешение на чтение внешнего хранилища
+    val hasStoragePermission = remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED ||
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU  // Для Android 13+ не нужно разрешение для галереи
+        )
+    }
+
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            galleryLauncher.launch("image/*")
+        } else {
+            Log.d("CameraScanScreen", "Разрешение на доступ к галерее отклонено")
+        }
+    }
+
     LaunchedEffect(Unit) {
         if (!hasCameraPermission.value) {
             cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
         }
+    }
+
+    // Функция для немедленного возврата результата
+    fun returnResult(value: String, path: String?) {
+        Log.d("CameraScanScreen", "Возвращаем результат: $value, путь: $path")
+        onResult(value, path)
     }
 
     fun capturePhoto() {
@@ -134,40 +219,88 @@ fun CameraScanScreen(
                     coroutineScope.launch {
                         val uri = Uri.fromFile(photoFile)
                         capturedImageUri = uri
+                        photoPath = photoFile.absolutePath
 
-                        // ВАЖНО: Всегда обрезаем до области сканирования
-                        recognizeTextFromImage(context, uri, cropToScanArea = true) { text ->
-                            recognizedText = text
-                            val numbers = extractNumbersFromText(text)
+                        // Используем TextRecognitionHelper для распознавания
+                        val textResult = TextRecognitionHelper.recognizeTextFromUri(
+                            context,
+                            uri,
+                            cropToScanArea = true
+                        )
 
-                            // Строгая фильтрация: только числа из области сканирования
-                            val filteredNumbers = filterMeterReadings(numbers)
+                        recognizedText = textResult
+                        Log.d("CameraScanScreen", "Полный распознанный текст: $textResult")
 
-                            if (filteredNumbers.isNotEmpty()) {
-                                // Берем наиболее вероятное показание (самое длинное)
-                                val selectedNumber = filteredNumbers.maxByOrNull { it.replace(".", "").length }
-                                manualInput = selectedNumber ?: ""
+                        val numbers = TextRecognitionHelper.extractNumbersFromText(textResult)
+                        Log.d("CameraScanScreen", "Извлечены числа: $numbers")
 
-                                // ДОБАВЛЕНО: АВТОМАТИЧЕСКОЕ ПОДТВЕРЖДЕНИЕ ПРИ ХОРОШЕМ РАСПОЗНАВАНИИ
-                                if (selectedNumber != null && selectedNumber.isNotBlank()) {
-                                    // Автоматически используем распознанное значение через 1 секунду
-                                    coroutineScope.launch {
-                                        kotlinx.coroutines.delay(1000)
-                                        onResult(selectedNumber, photoFile.absolutePath)
-                                    }
-                                }
-                            } else {
-                                manualInput = ""
-                                // Нет подходящих чисел - ждем ручного ввода
+                        val filteredNumbers = TextRecognitionHelper.filterMeterReadings(numbers)
+                        Log.d("CameraScanScreen", "Отфильтрованные числа: $filteredNumbers")
+
+                        if (filteredNumbers.isNotEmpty()) {
+                            // Берем наиболее вероятное показание (самое длинное)
+                            val selectedNumber = filteredNumbers.maxByOrNull { it.replace(".", "").length }
+                            manualInput = selectedNumber ?: ""
+                            scanResult = selectedNumber
+
+                            Log.d("CameraScanScreen", "Выбрано число: $selectedNumber")
+
+                            // Немедленно возвращаем результат
+                            if (selectedNumber != null && selectedNumber.isNotBlank()) {
+                                Log.d("CameraScanScreen", "Автоматически подтверждаем результат")
+                                returnResult(selectedNumber, photoFile.absolutePath)
                             }
-                            isScanning = false
+                        } else {
+                            manualInput = ""
+                            scanResult = null
+                            Log.d("CameraScanScreen", "Не найдено подходящих чисел")
                         }
+                        isScanning = false
                     }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     Log.e("CameraScanScreen", "Ошибка при съемке фото: ${exception.message}", exception)
                     isScanning = false
+                }
+            }
+        )
+    }
+
+    // Диалог для выбора источника фото
+    if (showGallerySelection) {
+        AlertDialog(
+            onDismissRequest = { showGallerySelection = false },
+            title = { Text("Выберите источник фото") },
+            text = { Text("Сделать новое фото или выбрать из галереи?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showGallerySelection = false
+                        // Запрашиваем разрешение на доступ к галерее, если нужно
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                            if (!hasStoragePermission.value) {
+                                storagePermissionLauncher.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                            } else {
+                                galleryLauncher.launch("image/*")
+                            }
+                        } else {
+                            galleryLauncher.launch("image/*")
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Галерея")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showGallerySelection = false }
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Отмена")
                 }
             }
         )
@@ -180,6 +313,14 @@ fun CameraScanScreen(
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+                actions = {
+                    // Кнопка для выбора фото из галереи
+                    IconButton(
+                        onClick = { showGallerySelection = true }
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = "Выбрать из галереи")
                     }
                 }
             )
@@ -207,25 +348,11 @@ fun CameraScanScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Кнопка подтверждения
-                if (recognizedText.isNotEmpty() || manualInput.isNotEmpty() || capturedImageUri != null) {
+                // Кнопка подтверждения (всегда видима если есть мануальный ввод)
+                if (manualInput.isNotEmpty()) {
                     FloatingActionButton(
                         onClick = {
-                            val result = if (manualInput.isNotEmpty()) {
-                                manualInput
-                            } else {
-                                val numbers = extractNumbersFromText(recognizedText)
-                                if (numbers.isNotEmpty()) {
-                                    val selectedNumber = numbers.maxByOrNull { it.replace(".", "").length }
-                                        ?: numbers.first()
-                                    removeLeadingZeros(selectedNumber)
-                                } else {
-                                    ""
-                                }
-                            }
-
-                            val photoPath = capturedImageUri?.path
-                            onResult(result, photoPath)
+                            returnResult(manualInput, photoPath)
                         }
                     ) {
                         Icon(Icons.Default.Check, contentDescription = "Использовать")
@@ -239,162 +366,314 @@ fun CameraScanScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (hasCameraPermission.value) {
-                // Камера - занимает большую часть экрана
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    // Полноэкранная камера
-                    AdvancedCameraView(
-                        modifier = Modifier.fillMaxSize(),
-                        onCameraInitialized = { imageCaptureInstance ->
-                            imageCapture = imageCaptureInstance
-                        }
-                    )
-
-                    // Overlay с рамкой сканирования - ПРАВИЛЬНАЯ ЛОГИКА!
+            if (hasCameraPermission.value && !showGallerySelection) {
+                // Если выбрано фото из галереи, показываем его
+                if (capturedImageUri != null && photoPath != null) {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
                     ) {
-                        // Рисуем 4 черных прямоугольника ВОКРУГ области сканирования
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val canvasWidth = size.width
-                            val canvasHeight = size.height
-                            val scanWidth = canvasWidth * 0.8f
-                            val scanHeight = scanWidth * 0.3f
-                            val scanRect = Rect(
-                                left = (canvasWidth - scanWidth) / 2,
-                                top = (canvasHeight - scanHeight) / 2,
-                                right = (canvasWidth + scanWidth) / 2,
-                                bottom = (canvasHeight + scanHeight) / 2
-                            )
-
-                            // 1. Верхний черный прямоугольник
-                            drawRect(
-                                color = Color.Black.copy(alpha = 0.6f),
-                                topLeft = Offset(0f, 0f),
-                                size = Size(canvasWidth, scanRect.top)
-                            )
-
-                            // 2. Нижний черный прямоугольник
-                            drawRect(
-                                color = Color.Black.copy(alpha = 0.6f),
-                                topLeft = Offset(0f, scanRect.bottom),
-                                size = Size(canvasWidth, canvasHeight - scanRect.bottom)
-                            )
-
-                            // 3. Левый черный прямоугольник (слева от области сканирования)
-                            drawRect(
-                                color = Color.Black.copy(alpha = 0.6f),
-                                topLeft = Offset(0f, scanRect.top),
-                                size = Size(scanRect.left, scanRect.height)
-                            )
-
-                            // 4. Правый черный прямоугольник (справа от области сканирования)
-                            drawRect(
-                                color = Color.Black.copy(alpha = 0.6f),
-                                topLeft = Offset(scanRect.right, scanRect.top),
-                                size = Size(canvasWidth - scanRect.right, scanRect.height)
-                            )
-
-                            // Зеленая рамка области сканирования
-                            drawRect(
-                                color = Color.Green,
-                                topLeft = Offset(scanRect.left, scanRect.top),
-                                size = Size(scanRect.width, scanRect.height),
-                                style = Stroke(width = 3f)
-                            )
-
-                            // Уголки рамки
-                            val cornerLength = 30f
-                            val cornerWidth = 4f
-
-                            // Левый верхний угол
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.left, scanRect.top),
-                                end = Offset(scanRect.left + cornerLength, scanRect.top),
-                                strokeWidth = cornerWidth
-                            )
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.left, scanRect.top),
-                                end = Offset(scanRect.left, scanRect.top + cornerLength),
-                                strokeWidth = cornerWidth
-                            )
-
-                            // Правый верхний угол
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.right, scanRect.top),
-                                end = Offset(scanRect.right - cornerLength, scanRect.top),
-                                strokeWidth = cornerWidth
-                            )
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.right, scanRect.top),
-                                end = Offset(scanRect.right, scanRect.top + cornerLength),
-                                strokeWidth = cornerWidth
-                            )
-
-                            // Левый нижний угол
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.left, scanRect.bottom),
-                                end = Offset(scanRect.left + cornerLength, scanRect.bottom),
-                                strokeWidth = cornerWidth
-                            )
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.left, scanRect.bottom),
-                                end = Offset(scanRect.left, scanRect.bottom - cornerLength),
-                                strokeWidth = cornerWidth
-                            )
-
-                            // Правый нижний угол
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.right, scanRect.bottom),
-                                end = Offset(scanRect.right - cornerLength, scanRect.bottom),
-                                strokeWidth = cornerWidth
-                            )
-                            drawLine(
-                                color = Color.Green,
-                                start = Offset(scanRect.right, scanRect.bottom),
-                                end = Offset(scanRect.right, scanRect.bottom - cornerLength),
-                                strokeWidth = cornerWidth
-                            )
-
-                            // Движущаяся линия сканирования (только если идет сканирование)
-                            if (isScanning) {
-                                drawLine(
-                                    color = Color.Green.copy(alpha = 0.7f),
-                                    start = Offset(
-                                        scanRect.left,
-                                        scanRect.top + scanRect.height * animatedProgress.value
-                                    ),
-                                    end = Offset(
-                                        scanRect.right,
-                                        scanRect.top + scanRect.height * animatedProgress.value
-                                    ),
-                                    strokeWidth = 3f
+                        // Показываем выбранное фото
+                        val bitmap = loadBitmapFromUri(context, capturedImageUri!!)
+                        bitmap?.let {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(16.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Image(
+                                    bitmap = it.asImageBitmap(),
+                                    contentDescription = "Фото из галереи",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
                                 )
                             }
                         }
 
-                        // Подсказка
-                        Text(
-                            text = "Наведите счетчик в рамку",
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                        Box(
                             modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 32.dp)
+                                .fillMaxWidth()
+
+                        ) {
+                            // Показываем выбранное фото
+                            val bitmap = loadBitmapFromUri(context, capturedImageUri!!)
+                            bitmap?.let {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(16.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Image(
+                                        bitmap = it.asImageBitmap(),
+                                        contentDescription = "Фото из галереи",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                }
+                            }
+
+                            // Overlay с рамкой сканирования (для ориентира)
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val canvasWidth = size.width
+                                    val canvasHeight = size.height
+                                    val scanWidth = canvasWidth * 0.8f
+                                    val scanHeight = scanWidth * 0.3f
+                                    val scanRect = Rect(
+                                        left = (canvasWidth - scanWidth) / 2,
+                                        top = (canvasHeight - scanHeight) / 2,
+                                        right = (canvasWidth + scanWidth) / 2,
+                                        bottom = (canvasHeight + scanHeight) / 2
+                                    )
+
+                                    // Зеленая рамка области сканирования
+                                    drawRect(
+                                        color = Color.Green,
+                                        topLeft = Offset(scanRect.left, scanRect.top),
+                                        size = Size(scanRect.width, scanRect.height),
+                                        style = Stroke(width = 3f)
+                                    )
+
+                                    // Уголки рамки
+                                    val cornerLength = 30f
+                                    val cornerWidth = 4f
+
+                                    // Левый верхний угол
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.left, scanRect.top),
+                                        end = Offset(scanRect.left + cornerLength, scanRect.top),
+                                        strokeWidth = cornerWidth
+                                    )
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.left, scanRect.top),
+                                        end = Offset(scanRect.left, scanRect.top + cornerLength),
+                                        strokeWidth = cornerWidth
+                                    )
+
+                                    // Правый верхний угол
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.right, scanRect.top),
+                                        end = Offset(scanRect.right - cornerLength, scanRect.top),
+                                        strokeWidth = cornerWidth
+                                    )
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.right, scanRect.top),
+                                        end = Offset(scanRect.right, scanRect.top + cornerLength),
+                                        strokeWidth = cornerWidth
+                                    )
+
+                                    // Левый нижний угол
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.left, scanRect.bottom),
+                                        end = Offset(scanRect.left + cornerLength, scanRect.bottom),
+                                        strokeWidth = cornerWidth
+                                    )
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.left, scanRect.bottom),
+                                        end = Offset(scanRect.left, scanRect.bottom - cornerLength),
+                                        strokeWidth = cornerWidth
+                                    )
+
+                                    // Правый нижний угол
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.right, scanRect.bottom),
+                                        end = Offset(scanRect.right - cornerLength, scanRect.bottom),
+                                        strokeWidth = cornerWidth
+                                    )
+                                    drawLine(
+                                        color = Color.Green,
+                                        start = Offset(scanRect.right, scanRect.bottom),
+                                        end = Offset(scanRect.right, scanRect.bottom - cornerLength),
+                                        strokeWidth = cornerWidth
+                                    )
+                                }
+
+                                // Подсказка для фото из галереи - ВНЕ Canvas, внутри Box
+                                Text(
+                                    text = "Фото из галереи",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 32.dp)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // Камера - занимает большую часть экрана
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    ) {
+                        // Полноэкранная камера
+                        AdvancedCameraView(
+                            modifier = Modifier.fillMaxSize(),
+                            onCameraInitialized = { imageCaptureInstance ->
+                                imageCapture = imageCaptureInstance
+                            }
                         )
+
+                        // Overlay с рамкой сканирования
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Рисуем 4 черных прямоугольника ВОКРУГ области сканирования
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val canvasWidth = size.width
+                                val canvasHeight = size.height
+                                val scanWidth = canvasWidth * 0.8f
+                                val scanHeight = scanWidth * 0.3f
+                                val scanRect = Rect(
+                                    left = (canvasWidth - scanWidth) / 2,
+                                    top = (canvasHeight - scanHeight) / 2,
+                                    right = (canvasWidth + scanWidth) / 2,
+                                    bottom = (canvasHeight + scanHeight) / 2
+                                )
+
+                                // 1. Верхний черный прямоугольник
+                                drawRect(
+                                    color = Color.Black.copy(alpha = 0.6f),
+                                    topLeft = Offset(0f, 0f),
+                                    size = Size(canvasWidth, scanRect.top)
+                                )
+
+                                // 2. Нижний черный прямоугольник
+                                drawRect(
+                                    color = Color.Black.copy(alpha = 0.6f),
+                                    topLeft = Offset(0f, scanRect.bottom),
+                                    size = Size(canvasWidth, canvasHeight - scanRect.bottom)
+                                )
+
+                                // 3. Левый черный прямоугольник (слева от области сканирования)
+                                drawRect(
+                                    color = Color.Black.copy(alpha = 0.6f),
+                                    topLeft = Offset(0f, scanRect.top),
+                                    size = Size(scanRect.left, scanRect.height)
+                                )
+
+                                // 4. Правый черный прямоугольник (справа от области сканирования)
+                                drawRect(
+                                    color = Color.Black.copy(alpha = 0.6f),
+                                    topLeft = Offset(scanRect.right, scanRect.top),
+                                    size = Size(canvasWidth - scanRect.right, scanRect.height)
+                                )
+
+                                // Зеленая рамка области сканирования
+                                drawRect(
+                                    color = Color.Green,
+                                    topLeft = Offset(scanRect.left, scanRect.top),
+                                    size = Size(scanRect.width, scanRect.height),
+                                    style = Stroke(width = 3f)
+                                )
+
+                                // Уголки рамки
+                                val cornerLength = 30f
+                                val cornerWidth = 4f
+
+                                // Левый верхний угол
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.left, scanRect.top),
+                                    end = Offset(scanRect.left + cornerLength, scanRect.top),
+                                    strokeWidth = cornerWidth
+                                )
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.left, scanRect.top),
+                                    end = Offset(scanRect.left, scanRect.top + cornerLength),
+                                    strokeWidth = cornerWidth
+                                )
+
+                                // Правый верхний угол
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.right, scanRect.top),
+                                    end = Offset(scanRect.right - cornerLength, scanRect.top),
+                                    strokeWidth = cornerWidth
+                                )
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.right, scanRect.top),
+                                    end = Offset(scanRect.right, scanRect.top + cornerLength),
+                                    strokeWidth = cornerWidth
+                                )
+
+                                // Левый нижний угол
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.left, scanRect.bottom),
+                                    end = Offset(scanRect.left + cornerLength, scanRect.bottom),
+                                    strokeWidth = cornerWidth
+                                )
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.left, scanRect.bottom),
+                                    end = Offset(scanRect.left, scanRect.bottom - cornerLength),
+                                    strokeWidth = cornerWidth
+                                )
+
+                                // Правый нижний угол
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.right, scanRect.bottom),
+                                    end = Offset(scanRect.right - cornerLength, scanRect.bottom),
+                                    strokeWidth = cornerWidth
+                                )
+                                drawLine(
+                                    color = Color.Green,
+                                    start = Offset(scanRect.right, scanRect.bottom),
+                                    end = Offset(scanRect.right, scanRect.bottom - cornerLength),
+                                    strokeWidth = cornerWidth
+                                )
+
+                                // Движущаяся линия сканирования (только если идет сканирование)
+                                if (isScanning) {
+                                    drawLine(
+                                        color = Color.Green.copy(alpha = 0.7f),
+                                        start = Offset(
+                                            scanRect.left,
+                                            scanRect.top + scanRect.height * animatedProgress.value
+                                        ),
+                                        end = Offset(
+                                            scanRect.right,
+                                            scanRect.top + scanRect.height * animatedProgress.value
+                                        ),
+                                        strokeWidth = 3f
+                                    )
+                                }
+                            }
+
+                            // Подсказка
+                            Text(
+                                text = if (capturedImageUri == null)
+                                    "Наведите счетчик в рамку"
+                                else
+                                    "Фото из галереи",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 32.dp)
+                            )
+                        }
                     }
                 }
 
@@ -437,45 +716,52 @@ fun CameraScanScreen(
                     Column(
                         modifier = Modifier.padding(16.dp)
                     ) {
+                        if (capturedImageUri != null && capturedImageUri.toString().contains("temp_image")) {
+                            Text(
+                                text = "📁 Фото из галереи",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+
                         Text(
                             text = "Результаты распознавания",
                             style = MaterialTheme.typography.titleSmall
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        if (recognizedText.isNotEmpty()) {
-                            val foundNumbers = extractNumbersFromText(recognizedText)
-                            val filteredNumbers = filterMeterReadings(foundNumbers)
+                        if (scanResult != null) {
+                            Text(
+                                text = "✓ Значение автоматически распознано: $scanResult",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            if (capturedImageUri == null || !capturedImageUri.toString().contains("temp_image")) {
+                                Text(
+                                    text = "Экран закроется автоматически через 2 секунды",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        } else if (recognizedText.isNotEmpty()) {
+                            val numbers = TextRecognitionHelper.extractNumbersFromText(recognizedText)
+                            val filteredNumbers = TextRecognitionHelper.filterMeterReadings(numbers)
 
                             if (filteredNumbers.isNotEmpty()) {
-                                // Убираем ведущие нули для отображения
                                 val cleanNumbers = filteredNumbers.distinct()
                                 Text(
-                                    text = "Найдены цифры в области сканирования: ${cleanNumbers.joinToString(", ")}",
+                                    text = "Найдены цифры: ${cleanNumbers.joinToString(", ")}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
 
-                                // Выбираем наиболее вероятное показание
-                                val selectedNumber = if (manualInput.isNotEmpty()) {
-                                    manualInput
-                                } else {
-                                    // Выбираем число с наибольшим количеством цифр
-                                    val longestNumber = cleanNumbers.maxByOrNull { it.replace(".", "").length }
-                                    longestNumber ?: cleanNumbers.first()
-                                }
-
-                                Text(
-                                    text = "Выбрано: $selectedNumber",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                )
-
                                 // Предлагаем выбрать другое число
                                 if (cleanNumbers.size > 1) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Выберите другое значение:",
+                                        text = "Выберите значение:",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -489,7 +775,10 @@ fun CameraScanScreen(
                                         cleanNumbers.forEach { number ->
                                             FilterChip(
                                                 selected = manualInput == number,
-                                                onClick = { manualInput = number },
+                                                onClick = {
+                                                    manualInput = number
+                                                    scanResult = number
+                                                },
                                                 label = { Text(number) }
                                             )
                                         }
@@ -497,14 +786,17 @@ fun CameraScanScreen(
                                 }
                             } else {
                                 Text(
-                                    text = "Значимые цифры не найдены. Убедитесь, что счетчик в области сканирования",
+                                    text = "Значимые цифры не найдены",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.error
                                 )
                             }
                         } else {
                             Text(
-                                text = "Сделайте фото счетчика в области сканирования...",
+                                text = if (capturedImageUri != null)
+                                    "Загружено фото из галереи. Распознавание..."
+                                else
+                                    "Сделайте фото счетчика в области сканирования...",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -525,6 +817,7 @@ fun CameraScanScreen(
                                 // Разрешаем только цифры и одну точку
                                 if (newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
                                     manualInput = newValue
+                                    scanResult = newValue
                                 }
                             },
                             label = { Text("Введите показания") },
@@ -542,11 +835,36 @@ fun CameraScanScreen(
 
                         if (manualInput.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "✓ Значение сохранено",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Button(
+                                onClick = {
+                                    returnResult(manualInput, photoPath)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Использовать это значение")
+                            }
+                        }
+
+                        // Кнопка для повторной загрузки фото из галереи
+                        if (capturedImageUri != null && capturedImageUri.toString().contains("temp_image")) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    capturedImageUri = null
+                                    photoPath = null
+                                    recognizedText = ""
+                                    manualInput = ""
+                                    scanResult = null
+                                    showGallerySelection = true
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Выбрать другое фото")
+                            }
                         }
                     }
                 }
@@ -598,9 +916,47 @@ fun CameraScanScreen(
         }
     }
 
+    // Автоматически закрываем экран через 2 секунды после успешного распознавания
+    // Только для фото с камеры, не для галереи
+    LaunchedEffect(scanResult) {
+        if (scanResult != null && scanResult!!.isNotBlank() &&
+            (capturedImageUri == null || !capturedImageUri.toString().contains("temp_image"))) {
+            kotlinx.coroutines.delay(2000)
+            returnResult(scanResult!!, photoPath)
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             cameraExecutor.shutdown()
+            // Очищаем временные файлы
+            if (photoPath != null && photoPath!!.contains("temp_image")) {
+                try {
+                    File(photoPath).delete()
+                } catch (e: Exception) {
+                    Log.e("CameraScanScreen", "Ошибка удаления временного файла: ${e.message}")
+                }
+            }
+        }
+    }
+}
+
+// Функция для создания временного файла
+private fun createTempImageFile(context: Context): File {
+    val timeStamp = System.currentTimeMillis()
+    val storageDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+    return File.createTempFile(
+        "temp_image_${timeStamp}_",
+        ".jpg",
+        storageDir
+    )
+}
+
+// Функция для копирования Uri в файл
+private fun copyUriToFile(context: Context, uri: Uri, file: File) {
+    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+        FileOutputStream(file).use { outputStream ->
+            inputStream.copyTo(outputStream)
         }
     }
 }
@@ -734,7 +1090,6 @@ fun PhotoPreviewScreen(
                 }
             }
 
-            // Поле для подтверждения/исправления значения
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -770,214 +1125,25 @@ fun PhotoPreviewScreen(
     }
 }
 
-// Улучшенная функция для распознавания текста ТОЛЬКО из области сканирования
-private fun recognizeTextFromImage(
-    context: Context,
-    imageUri: Uri,
-    cropToScanArea: Boolean = true,
-    onResult: (String) -> Unit
-) {
-    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-
-    try {
-        // 1. Загружаем полное изображение
-        val fullBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val source = ImageDecoder.createSource(context.contentResolver, imageUri)
-            ImageDecoder.decodeBitmap(source)
-        } else {
-            MediaStore.Images.Media.getBitmap(context.contentResolver, imageUri)
-        }
-
-        if (fullBitmap == null) {
-            Log.e("TextRecognition", "Не удалось загрузить изображение")
-            onResult("")
-            return
-        }
-
-        // 2. Логирование для отладки
-        Log.d("TextRecognition", "Начало распознавания, cropToScanArea: $cropToScanArea")
-        Log.d("TextRecognition", "Размер изображения: ${fullBitmap.width}x${fullBitmap.height}")
-
-        if (!cropToScanArea) {
-            // Если не обрезаем - распознаем все изображение
-            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(fullBitmap, 0)
-            recognizer.process(image)
-                .addOnSuccessListener { visionText ->
-                    Log.d("TextRecognition", "РАСПОЗНАННЫЙ ТЕКСТ (полное изображение): ${visionText.text}")
-                    onResult(visionText.text)
-                }
-                .addOnFailureListener { e ->
-                    Log.e("TextRecognition", "Ошибка распознавания: ${e.message}", e)
-                    onResult("")
-                }
-            fullBitmap.recycle()
-            return
-        }
-
-        // 3. ТОЧНЫЕ параметры обрезки (должны совпадать с UI!)
-        val fullWidth = fullBitmap.width
-        val fullHeight = fullBitmap.height
-
-        // ТАКИЕ ЖЕ пропорции, как на экране:
-        // Область сканирования: 80% ширины, высота = 30% от этой ширины
-        val scanAreaWidth = (fullWidth * 0.8).toInt()
-        val scanAreaHeight = (scanAreaWidth * 0.3).toInt() // 0.3 = 30%
-
-        // Центрируем область
-        val left = (fullWidth - scanAreaWidth) / 2
-        val top = (fullHeight - scanAreaHeight) / 2
-
-        // 4. Проверяем границы
-        if (left < 0 || top < 0 ||
-            left + scanAreaWidth > fullWidth ||
-            top + scanAreaHeight > fullHeight) {
-            Log.e("TextRecognition", "Область сканирования выходит за границы изображения")
-            Log.e("TextRecognition", "left=$left, top=$top, width=$scanAreaWidth, height=$scanAreaHeight")
-            onResult("")
-            fullBitmap.recycle()
-            return
-        }
-
-        Log.d("TextRecognition", "Область сканирования: $left,$top ${scanAreaWidth}x$scanAreaHeight")
-
-        // 5. ВАЖНО: Обрезаем ТОЛЬКО область сканирования
-        val croppedBitmap = Bitmap.createBitmap(
-            fullBitmap,
-            left,
-            top,
-            scanAreaWidth,
-            scanAreaHeight
-        )
-
-        // 6. Сохраняем для отладки (опционально)
-        saveDebugImage(context, croppedBitmap, "scan_area_${System.currentTimeMillis()}.jpg")
-
-        // 7. Распознаем ТОЛЬКО из обрезанной области
-        val image = com.google.mlkit.vision.common.InputImage.fromBitmap(croppedBitmap, 0)
-
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                val resultText = visionText.text
-                Log.d("TextRecognition", "РАСПОЗНАННЫЙ ТЕКСТ ИЗ ОБЛАСТИ СКАНИРОВАНИЯ: $resultText")
-
-                // Логируем все блоки текста для отладки
-                for (block in visionText.textBlocks) {
-                    Log.d("TextRecognition", "Блок текста: ${block.text}")
-                    Log.d("TextRecognition", "Координаты блока: ${block.boundingBox}")
-                }
-
-                onResult(resultText)
-            }
-            .addOnFailureListener { e ->
-                Log.e("TextRecognition", "Ошибка распознавания: ${e.message}", e)
-                onResult("")
-            }
-
-        // 8. Освобождаем ресурсы
-        croppedBitmap.recycle()
-        fullBitmap.recycle()
-
-    } catch (e: Exception) {
-        Log.e("TextRecognition", "Ошибка обработки изображения: ${e.message}", e)
-        onResult("")
-    }
-}
-
-// Функция для сохранения debug изображения
-private fun saveDebugImage(context: Context, bitmap: Bitmap, fileName: String) {
-    try {
-        val debugDir = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "debug")
-        if (!debugDir.exists()) {
-            debugDir.mkdirs()
-        }
-
-        val file = File(debugDir, fileName)
-        val stream = FileOutputStream(file)
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, stream)
-        stream.flush()
-        stream.close()
-        Log.d("Debug", "Сохранено debug изображение: ${file.absolutePath}")
-    } catch (e: Exception) {
-        Log.e("Debug", "Ошибка сохранения debug изображения", e)
-    }
-}
-
-// Улучшенная функция для извлечения чисел из текста
-private fun extractNumbersFromText(text: String): List<String> {
-    if (text.isBlank()) return emptyList()
-
-    // Ищем числа в форматах: 1234, 1234.56, 1,234.56
-    val patterns = listOf(
-        """\b\d{3,9}\b""",                     // 1234567 (3-9 цифр)
-        """\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b""", // 1,234.56
-        """\b\d+\.\d{1,3}\b""",                 // 1234.56
-        """\b\d{3,9}[\.,]\d{1,3}\b"""           // 1234,56 или 1234.56
-    )
-
-    val results = mutableListOf<String>()
-
-    patterns.forEach { pattern ->
-        val regex = pattern.toRegex()
-        val matches = regex.findAll(text)
-        matches.forEach { match ->
-            val number = match.value.replace(',', '.')
-            // Проверяем, что это действительно число
-            if (number.replace(".", "").toDoubleOrNull() != null) {
-                results.add(removeLeadingZeros(number))
-            }
-        }
-    }
-
-    return results.distinct()
-}
-
-// Функция для фильтрации показаний счетчика
-private fun filterMeterReadings(numbers: List<String>): List<String> {
-    return numbers.filter { number ->
-        val cleanNumber = removeLeadingZeros(number)
-        val digitCount = cleanNumber.replace(".", "").length
-
-        // УВЕЛИЧЕННЫЙ ДИАПАЗОН: счетчики могут иметь от 3 до 9 цифр
-        digitCount in 3..9 && cleanNumber.replace(".", "").toDoubleOrNull() != null
-    }.distinct()
-}
-
-// Функция для удаления ведущих нулей
-private fun removeLeadingZeros(number: String): String {
-    if (number.isBlank()) return ""
-
-    // Разделяем на целую и дробную части
-    val parts = number.split('.')
-    var integerPart = parts[0]
-
-    // Убираем ведущие нули из целой части, но оставляем один ноль если все цифры нули
-    integerPart = integerPart.replaceFirst("^0+".toRegex(), "")
-    if (integerPart.isEmpty()) {
-        integerPart = "0"
-    }
-
-    // Возвращаем число с дробной частью если она была
-    return if (parts.size > 1) {
-        "$integerPart.${parts[1]}"
-    } else {
-        integerPart
-    }
-}
-
 // Вспомогательная функция для загрузки Bitmap
 fun loadBitmapFromFile(context: Context, filePath: String): Bitmap? {
     return try {
-        val file = File(filePath)
-        if (!file.exists()) return null
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val source = ImageDecoder.createSource(context.contentResolver, Uri.fromFile(file))
-            ImageDecoder.decodeBitmap(source)
+        if (filePath.startsWith("content://") || filePath.startsWith("file://")) {
+            val uri = Uri.parse(filePath)
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream)
+            }
         } else {
-            MediaStore.Images.Media.getBitmap(context.contentResolver, Uri.fromFile(file))
+            val file = File(filePath)
+            if (file.exists()) {
+                BitmapFactory.decodeFile(file.absolutePath)
+            } else {
+                null
+            }
         }
     } catch (e: Exception) {
-        Log.e("BitmapLoader", "Ошибка загрузки изображения: ${e.message}", e)
+        e.printStackTrace()
         null
     }
 }
