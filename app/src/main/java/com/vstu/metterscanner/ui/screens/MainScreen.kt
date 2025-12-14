@@ -45,12 +45,17 @@ fun MainScreen(
         meters.sortedByDescending { it.date }.take(10)
     }
 
-    // Сегодняшняя дата для статистики
-    val today = LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+    val today = LocalDate.now()
     val todayCount = remember(meters) {
         meters.count { meter ->
-            val meterDate = meter.date.split(" ")[0]
-            meterDate == today
+            try {
+                val meterDateStr = meter.date.split(" ")[0]
+                val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+                val meterDate = LocalDate.parse(meterDateStr, dateFormatter)
+                meterDate == today
+            } catch (e: Exception) {
+                false
+            }
         }
     }
     val totalCount = meters.size
@@ -155,7 +160,6 @@ fun MainScreen(
                             )
                         }
 
-                        // Кнопка "Вся история"
                         item {
                             if (meters.size > 10) {
                                 OutlinedButton(
@@ -217,7 +221,7 @@ fun QuickStatsCard(
                 )
             }
 
-            // Последнее добавленное показание
+
             val lastMeter = recentMeters.firstOrNull()
             if (lastMeter != null) {
                 Column(
@@ -290,7 +294,7 @@ fun SimpleMeterCard(
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),
                     tint = when (meter.type) {
-                        MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                        MeterType.ELECTRICITY -> Color(0xFFFFFF00)
                         MeterType.COLD_WATER -> Color(0xFF2196F3)
                         MeterType.HOT_WATER -> Color(0xFFF44336)
                     }
@@ -323,8 +327,8 @@ fun SimpleMeterCard(
                     fontWeight = FontWeight.Bold,
                     color = when (meter.type) {
                         MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                        MeterType.COLD_WATER -> Color(0xFF2196F3)
-                        MeterType.HOT_WATER -> Color(0xFFF44336)
+                        MeterType.COLD_WATER -> MaterialTheme.colorScheme.primary
+                        MeterType.HOT_WATER -> MaterialTheme.colorScheme.primary
                     }
                 )
                 Text(
@@ -793,5 +797,6 @@ fun getUnitForType(type: MeterType): String = when (type) {
     MeterType.ELECTRICITY -> "кВт·ч"
     MeterType.COLD_WATER -> "м³"
     MeterType.HOT_WATER -> "м³"
+
 }
 

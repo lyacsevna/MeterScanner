@@ -2,6 +2,7 @@ package com.vstu.metterscanner.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,7 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -23,11 +26,11 @@ import androidx.navigation.NavController
 import com.vstu.metterscanner.MeterViewModel
 import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
+import kotlin.math.*
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
-import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +43,7 @@ fun StatisticsScreen(
     var selectedType by remember { mutableStateOf<MeterType?>(null) }
     var dateRange by remember { mutableStateOf(getDefaultDateRange(selectedPeriod)) }
     var hoveredIndex by remember { mutableStateOf<Int?>(null) }
+    var hoveredPieIndex by remember { mutableStateOf<Int?>(null) }
 
     val statisticsData = remember(meters, dateRange, selectedType) {
         calculateStatistics(meters, dateRange, selectedType)
@@ -104,10 +108,35 @@ fun StatisticsScreen(
                     selectedPeriod = period
                     dateRange = getDefaultDateRange(period)
                     hoveredIndex = null
+                    hoveredPieIndex = null
                 }
             )
 
             KpiCards(statisticsData.kpi, selectedType)
+
+            // Показываем круговую диаграмму когда выбраны все типы
+            if (selectedType == null && statisticsData.distribution.isNotEmpty()) {
+                InteractivePieChart(
+                    distribution = statisticsData.distribution,
+                    totalConsumption = statisticsData.kpi.consumption,
+                    onHover = { index -> hoveredPieIndex = index }
+                )
+
+                hoveredPieIndex?.let { index ->
+                    if (index < statisticsData.distribution.size) {
+                        val types = statisticsData.distribution.keys.toList()
+                        val type = types[index]
+                        val value = statisticsData.distribution[type] ?: 0.0
+                        PieChartTooltip(
+                            type = type,
+                            value = value,
+                            total = statisticsData.kpi.consumption
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             InteractiveChart(
                 chartData = chartData,
@@ -138,6 +167,309 @@ fun StatisticsScreen(
     }
 }
 
+@Composable
+fun InteractivePieChart(
+    distribution: Map<MeterType, Double>,
+    totalConsumption: Double,
+    onHover: (Int?) -> Unit
+) {
+    var hoveredIndex by remember { mutableStateOf<Int?>(null) }
+    val surfaceColor = MaterialTheme.colorScheme.surface
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Распределение по типам",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = "Всего: ${String.format("%.1f", totalConsumption)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Круговая диаграмма
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .aspectRatio(1f)
+                        .pointerInput(distribution) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val position = event.changes.first().position
+                                    val index = calculatePieHoveredIndex(
+                                        position = position,
+                                        size = size,
+                                        distribution = distribution
+                                    )
+                                    hoveredIndex = index
+                                    onHover(index)
+                                }
+                            }
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        if (distribution.isEmpty()) return@Canvas
+
+                        val center = Offset(size.width / 2, size.height / 2)
+                        val radius = min(size.width, size.height) * 0.4f
+
+                        // Сортируем типы по значению для стабильного отображения
+                        val sortedEntries = distribution.entries
+                            .sortedByDescending { it.value }
+                            .filter { it.value > 0 }
+
+                        if (sortedEntries.isEmpty()) return@Canvas
+
+                        var startAngle = 0f
+
+                        sortedEntries.forEachIndexed { index, (type, value) ->
+                            val percentage = value / totalConsumption
+                            val sweepAngle = (percentage * 360).toFloat()
+
+                            // Определяем цвет и толщину в зависимости от наведения
+                            val isHovered = index == hoveredIndex
+                            val color = getColorForType(type)
+                            val strokeWidth = if (isHovered) 8f else 0f
+                            val arcRadius = if (isHovered) radius + 4f else radius
+
+                            // Рисуем сектор
+                            drawArc(
+                                color = color,
+                                startAngle = startAngle,
+                                sweepAngle = sweepAngle,
+                                useCenter = true,
+                                topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
+                                size = Size(arcRadius * 2, arcRadius * 2),
+                                style = if (strokeWidth > 0) Stroke(strokeWidth) else Fill
+                            )
+
+                            // Добавляем обводку для выделенного сектора
+                            if (isHovered) {
+                                drawArc(
+                                    color = Color.White,
+                                    startAngle = startAngle,
+                                    sweepAngle = sweepAngle,
+                                    useCenter = true,
+                                    topLeft = Offset(center.x - radius, center.y - radius),
+                                    size = Size(radius * 2, radius * 2),
+                                    style = Stroke(2f)
+                                )
+                            }
+
+                            startAngle += sweepAngle
+                        }
+
+                        // Рисуем центральный круг для эффекта пончика
+                        drawCircle(
+                            color = surfaceColor,
+                            center = center,
+                            radius = radius * 0.4f
+                        )
+
+                        // Отображаем общий процент в центре
+                        drawContext.canvas.nativeCanvas.apply {
+                            drawText(
+                                "100%",
+                                center.x,
+                                center.y + 8,
+                                android.graphics.Paint().apply {
+                                    color = android.graphics.Color.GRAY
+                                    textSize = 14f
+                                    textAlign = android.graphics.Paint.Align.CENTER
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Легенда
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    distribution.entries
+                        .sortedByDescending { it.value }
+                        .filter { it.value > 0 }
+                        .forEachIndexed { index, (type, value) ->
+                            val percentage = (value / totalConsumption * 100).toInt()
+                            val isHovered = index == hoveredIndex
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        hoveredIndex = if (hoveredIndex == index) null else index
+                                        onHover(if (hoveredIndex == index) null else index)
+                                    }
+                                    .padding(vertical = 4.dp)
+                                    .background(
+                                        if (isHovered) MaterialTheme.colorScheme.surfaceVariant
+                                        else Color.Transparent,
+                                        RoundedCornerShape(4.dp)
+                                    )
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .background(
+                                                getColorForType(type),
+                                                RoundedCornerShape(2.dp)
+                                            )
+                                    )
+                                    Text(
+                                        text = type.getDisplayName(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = if (isHovered) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+
+                                Text(
+                                    text = "$percentage%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (isHovered) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PieChartTooltip(
+    type: MeterType,
+    value: Double,
+    total: Double
+) {
+    val percentage = if (total > 0) (value / total * 100).toInt() else 0
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    type.getIcon(),
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = getColorForType(type)
+                )
+                Text(
+                    text = type.getDisplayName(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${String.format("%.1f", value)} ${type.getUnit()}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "$percentage% от общего расхода",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun calculatePieHoveredIndex(
+    position: Offset,
+    size: IntSize,
+    distribution: Map<MeterType, Double>
+): Int? {
+    if (distribution.isEmpty()) return null
+
+    val center = Offset(size.width / 2f, size.height / 2f)
+    val radius = min(size.width, size.height) * 0.4f
+
+    // Проверяем, находится ли точка внутри круга
+    val distanceFromCenter = sqrt(
+        (position.x - center.x).pow(2) + (position.y - center.y).pow(2)
+    )
+
+    if (distanceFromCenter > radius) return null
+
+    // Вычисляем угол точки
+    val dx = position.x - center.x
+    val dy = center.y - position.y // Инвертируем Y для правильного угла
+
+    var angle = atan2(dy, dx) * 180 / PI.toFloat()
+    if (angle < 0) angle += 360f
+
+    // Сортируем записи по значению
+    val sortedEntries = distribution.entries
+        .sortedByDescending { it.value }
+        .filter { it.value > 0 }
+
+    if (sortedEntries.isEmpty()) return null
+
+    val totalConsumption = distribution.values.sum()
+    var currentAngle = 0f
+
+    sortedEntries.forEachIndexed { index, (_, value) ->
+        val percentage = value / totalConsumption
+        val sweepAngle = (percentage * 360).toFloat()
+
+        if (angle >= currentAngle && angle < currentAngle + sweepAngle) {
+            return index
+        }
+
+        currentAngle += sweepAngle
+    }
+
+    return null
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PeriodFilterSection(
@@ -1074,7 +1406,7 @@ fun MeterType.getUnit() = when (this) {
 }
 
 fun getColorForType(type: MeterType) = when (type) {
-    MeterType.ELECTRICITY -> Color(0xFF2196F3)
-    MeterType.COLD_WATER -> Color(0xFF03A9F4)
-    MeterType.HOT_WATER -> Color(0xFFFF9800)
+    MeterType.ELECTRICITY -> Color(0xFFFFFF00)
+    MeterType.COLD_WATER -> Color(0xFF2196F3)
+    MeterType.HOT_WATER -> Color(0xFFF44336)
 }

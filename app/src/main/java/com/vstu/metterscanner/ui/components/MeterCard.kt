@@ -48,7 +48,7 @@ fun MeterCard(
                         contentDescription = null,
                         modifier = Modifier.size(20.dp),
                         tint = when (meter.type) {
-                            MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
+                            MeterType.ELECTRICITY -> Color(0xFFFFFF00)
                             MeterType.COLD_WATER -> Color(0xFF2196F3)
                             MeterType.HOT_WATER -> Color(0xFFF44336)
                         }
@@ -95,8 +95,8 @@ fun MeterCard(
                         fontWeight = FontWeight.Bold,
                         color = when (meter.type) {
                             MeterType.ELECTRICITY -> MaterialTheme.colorScheme.primary
-                            MeterType.COLD_WATER -> Color(0xFF2196F3)
-                            MeterType.HOT_WATER -> Color(0xFFF44336)
+                            MeterType.COLD_WATER -> MaterialTheme.colorScheme.primary
+                            MeterType.HOT_WATER -> MaterialTheme.colorScheme.primary
                         }
                     )
                     if (showUnit) {
