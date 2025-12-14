@@ -1,12 +1,5 @@
 package com.vstu.metterscanner.ui.screens
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.ImageDecoder
-import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
-import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -32,7 +25,8 @@ import com.vstu.metterscanner.data.Meter
 import com.vstu.metterscanner.data.MeterType
 import kotlinx.coroutines.launch
 import java.io.File
-
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,6 +41,7 @@ fun AddMeterScreen(
     var showCamera by remember { mutableStateOf(false) }
     var capturedPhotoPath by remember { mutableStateOf<String?>(null) }
     var showPhotoPreview by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
 
     val isFormValid by remember {
         derivedStateOf {
@@ -58,7 +53,39 @@ fun AddMeterScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
-    // Получаем последнее показание при изменении типа
+    // Функция для копирования файла в постоянное хранилище
+    suspend fun copyToPermanentStorage(tempPath: String): String {
+        return withContext(Dispatchers.IO) {
+            val tempFile = File(tempPath)
+            if (!tempFile.exists()) {
+                return@withContext tempPath
+            }
+
+            // Если это уже постоянный файл (не временный), возвращаем как есть
+            if (!tempPath.contains("temp_image") && !tempPath.contains("temp_")) {
+                return@withContext tempPath
+            }
+
+            val permanentDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+            val permanentFile = File(
+                permanentDir,
+                "meter_photo_${System.currentTimeMillis()}.jpg"
+            )
+
+            tempFile.copyTo(permanentFile, overwrite = true)
+
+            // Удаляем временный файл после копирования
+            try {
+                tempFile.delete()
+            } catch (e: Exception) {
+                // Игнорируем ошибку удаления
+            }
+
+            return@withContext permanentFile.absolutePath
+        }
+    }
+
+    // Получаем последнее показание при изменении типа только для отображения в карточке
     LaunchedEffect(selectedType) {
         lastMeter = viewModel.getLastMeter(selectedType)
     }
@@ -66,17 +93,28 @@ fun AddMeterScreen(
     if (showCamera) {
         CameraScanScreen(
             onResult = { scannedValue, photoPath ->
-                // АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПОЛЯ ПРИ ПОЛУЧЕНИИ РЕЗУЛЬТАТА
-                value = scannedValue
-                capturedPhotoPath = photoPath
-                showCamera = false
-
-                // Показать уведомление, что значение обновлено
+                // Обрабатываем результат сканирования
                 coroutineScope.launch {
-                    snackbarHostState.showSnackbar(
-                        message = "Значение распознано и установлено: $scannedValue",
-                        duration = SnackbarDuration.Short
-                    )
+                    var permanentPath: String? = null
+
+                    if (photoPath != null) {
+                        permanentPath = copyToPermanentStorage(photoPath)
+                    }
+
+                    // Обновляем UI в основном потоке
+                    withContext(Dispatchers.Main) {
+                        value = scannedValue
+                        capturedPhotoPath = permanentPath
+                        showCamera = false
+
+                        // Показываем уведомление
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(
+                                message = "Значение распознано и установлено: $scannedValue",
+                                duration = SnackbarDuration.Short
+                            )
+                        }
+                    }
                 }
             },
             onCancel = {
@@ -109,7 +147,7 @@ fun AddMeterScreen(
                     actions = {
                         IconButton(
                             onClick = { showCamera = true },
-                            enabled = !showCamera
+                            enabled = !showCamera && !isSaving
                         ) {
                             Icon(Icons.Default.CameraAlt, contentDescription = "Сканировать")
                         }
@@ -130,13 +168,13 @@ fun AddMeterScreen(
             ) {
                 // Карточка с информацией о последнем показании
                 if (lastMeter != null) {
-                    LastMeterCard(lastMeter!!)
+                    LastMeterCardSimple(lastMeter!!)
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                // Превью фотографии, если она есть
+                // Превью фотографии, если она есть (только для текущего добавления)
                 capturedPhotoPath?.let { photoPath ->
-                    val bitmap = loadBitmapFromFile(context, photoPath)
+                    val bitmap = ImageUtils.loadBitmapFromFile(context, photoPath)
                     bitmap?.let {
                         Card(
                             modifier = Modifier
@@ -164,7 +202,8 @@ fun AddMeterScreen(
                                             capturedPhotoPath = null
                                             showPhotoPreview = false
                                         },
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(24.dp),
+                                        enabled = !isSaving
                                     ) {
                                         Icon(
                                             Icons.Default.Close,
@@ -201,7 +240,7 @@ fun AddMeterScreen(
                     var expanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
                         expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
+                        onExpandedChange = { expanded = !expanded && !isSaving }
                     ) {
                         OutlinedTextField(
                             modifier = Modifier
@@ -215,7 +254,8 @@ fun AddMeterScreen(
                             },
                             onValueChange = {},
                             label = { Text("Выберите тип счетчика") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            enabled = !isSaving
                         )
 
                         ExposedDropdownMenu(
@@ -236,18 +276,12 @@ fun AddMeterScreen(
                                     onClick = {
                                         selectedType = type
                                         expanded = false
-                                        // Загружаем последнее показание для этого типа
+                                        // Только загружаем последнее показание для отображения в карточке
                                         coroutineScope.launch {
                                             lastMeter = viewModel.getLastMeter(type)
-                                            if (lastMeter != null) {
-                                                value = lastMeter!!.value.toString()
-                                                note = lastMeter!!.note
-                                            } else {
-                                                value = ""
-                                                note = ""
-                                            }
                                         }
-                                    }
+                                    },
+                                    enabled = !isSaving
                                 )
                             }
                         }
@@ -273,7 +307,8 @@ fun AddMeterScreen(
                         // Кнопка сканирования
                         OutlinedButton(
                             onClick = { showCamera = true },
-                            modifier = Modifier.height(36.dp)
+                            modifier = Modifier.height(36.dp),
+                            enabled = !isSaving
                         ) {
                             Icon(
                                 Icons.Default.CameraAlt,
@@ -288,11 +323,18 @@ fun AddMeterScreen(
                     OutlinedTextField(
                         value = value,
                         onValueChange = { newValue ->
-                            if (newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
+                            if (!isSaving && newValue.matches(Regex("^\\d*\\.?\\d*$")) && newValue.length <= 10) {
                                 value = newValue
                             }
                         },
-                        label = { Text("Например: 1234.56") },
+                        label = {
+                            val unit = when (selectedType) {
+                                MeterType.ELECTRICITY -> "кВт·ч"
+                                MeterType.COLD_WATER -> "м³"
+                                MeterType.HOT_WATER -> "м³"
+                            }
+                            Text("Например: 1234.56 ($unit)")
+                        },
                         leadingIcon = {
                             Icon(Icons.Default.Edit, contentDescription = "Показания")
                         },
@@ -301,7 +343,8 @@ fun AddMeterScreen(
                             imeAction = ImeAction.Next
                         ),
                         modifier = Modifier.fillMaxWidth(),
-                        isError = value.isNotBlank() && value.toDoubleOrNull() == null
+                        isError = value.isNotBlank() && value.toDoubleOrNull() == null,
+                        enabled = !isSaving
                     )
 
                     if (value.isNotBlank() && value.toDoubleOrNull() == null) {
@@ -328,7 +371,7 @@ fun AddMeterScreen(
 
                     OutlinedTextField(
                         value = note,
-                        onValueChange = { note = it },
+                        onValueChange = { if (!isSaving) note = it },
                         label = { Text("Необязательно") },
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Text,
@@ -338,7 +381,8 @@ fun AddMeterScreen(
                             .fillMaxWidth()
                             .heightIn(min = 100.dp),
                         maxLines = 4,
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isSaving
                     )
                 }
 
@@ -349,10 +393,12 @@ fun AddMeterScreen(
                 ) {
                     Button(
                         onClick = {
-                            if (isFormValid) {
+                            if (isFormValid && !isSaving) {
+                                isSaving = true
                                 focusManager.clearFocus()
                                 val meterValue = value.toDouble()
 
+                                // Проверка, что новое значение больше предыдущего
                                 val lastValue = lastMeter?.value ?: 0.0
                                 if (meterValue < lastValue) {
                                     coroutineScope.launch {
@@ -361,6 +407,7 @@ fun AddMeterScreen(
                                             duration = SnackbarDuration.Long
                                         )
                                     }
+                                    isSaving = false
                                     return@Button
                                 }
 
@@ -378,13 +425,18 @@ fun AddMeterScreen(
                                             message = "Показание успешно сохранено!",
                                             duration = SnackbarDuration.Short
                                         )
-                                        kotlinx.coroutines.delay(1500)
+
+                                        // Короткая задержка для показа snackbar, затем автоматическое закрытие
+                                        kotlinx.coroutines.delay(800)
+
+                                        // Автоматически закрываем экран и возвращаемся на MainScreen
                                         navController.popBackStack()
                                     } catch (e: Exception) {
                                         snackbarHostState.showSnackbar(
                                             message = "Ошибка сохранения: ${e.message}",
                                             duration = SnackbarDuration.Long
                                         )
+                                        isSaving = false
                                     }
                                 }
                             }
@@ -392,24 +444,42 @@ fun AddMeterScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
-                        enabled = isFormValid,
+                        enabled = isFormValid && !isSaving,
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            text = "Сохранить показания",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        if (isSaving) {
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("Сохранение...")
+                            }
+                        } else {
+                            Text(
+                                text = "Сохранить показания",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedButton(
                         onClick = {
-                            navController.popBackStack()
+                            if (!isSaving) {
+                                navController.popBackStack()
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
+                            .height(48.dp),
+                        enabled = !isSaving
                     ) {
                         Text("Отмена")
                     }
@@ -422,7 +492,7 @@ fun AddMeterScreen(
 }
 
 @Composable
-fun LastMeterCard(lastMeter: Meter) {
+fun LastMeterCardSimple(lastMeter: Meter) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -439,7 +509,7 @@ fun LastMeterCard(lastMeter: Meter) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Последнее показание",
+                    text = "Предыдущее показание",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -478,7 +548,7 @@ fun LastMeterCard(lastMeter: Meter) {
                 }
 
                 Text(
-                    text = "${lastMeter.value}",
+                    text = "${lastMeter.value} ${getUnitForType(lastMeter.type)}",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -495,4 +565,3 @@ fun LastMeterCard(lastMeter: Meter) {
         }
     }
 }
-

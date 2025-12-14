@@ -51,12 +51,14 @@ import java.io.FileOutputStream
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.flow.distinctUntilChanged
-import androidx.compose.runtime.snapshotFlow
+
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.activity.compose.BackHandler
+import com.vstu.metterscanner.ui.components.MeterCardWithPhoto
+import com.vstu.metterscanner.ui.screens.ImageUtils
+import com.vstu.metterscanner.ui.screens.ImageUtils.loadBitmapFromFile
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -419,7 +421,7 @@ fun HistoryScreen(
                         }
 
                         items(groupMeters) { meter ->
-                            MeterCard(
+                            MeterCardWithPhoto(
                                 meter = meter,
                                 onClick = {
                                     // Открываем меню для редактирования/удаления
@@ -806,7 +808,7 @@ fun EditMeterDialog(
                         }
                     }
 
-                    // Превью текущего фото
+
                     if (capturedPhotoPath != null) {
                         val currentBitmap = loadBitmapFromFile(context, capturedPhotoPath!!)
                         if (currentBitmap != null) {
@@ -1285,6 +1287,7 @@ fun saveCroppedBitmap(context: Context, bitmap: Bitmap): String {
 
     return file.absolutePath
 }
+
 
 
 // Компоненты ниже остаются без изменений

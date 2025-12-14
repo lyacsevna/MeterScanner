@@ -127,12 +127,6 @@ fun AboutScreen(navController: NavController) {
                         title = "Статистика",
                         description = "Анализ потребления ресурсов"
                     )
-
-                    FeatureItem(
-                        icon = Icons.Default.Notifications,
-                        title = "Напоминания",
-                        description = "Своевременная передача показаний"
-                    )
                 }
             }
 
